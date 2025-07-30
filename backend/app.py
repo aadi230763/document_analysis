@@ -972,9 +972,8 @@ def get_embedding_function():
     """Get or create the embedding function singleton"""
     global _embedding_fn
     if _embedding_fn is None:
-        _embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=str(EMBEDDING_MODEL)
-        )
+        from sentence_transformers import SentenceTransformer
+        _embedding_fn = SentenceTransformer(str(EMBEDDING_MODEL))
     return _embedding_fn
 
 if __name__ == '__main__':
