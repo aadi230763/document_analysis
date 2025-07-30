@@ -15,7 +15,6 @@ def check_requirements():
     """Check if required packages are installed"""
     required_packages = [
         ('flask', 'Flask'),
-        ('chromadb', 'chromadb'),
         ('sentence_transformers', 'sentence_transformers'),
         ('requests', 'requests'),
         ('cohere', 'cohere'),

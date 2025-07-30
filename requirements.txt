@@ -1,5 +1,4 @@
 Flask==2.3.3
-chromadb==0.4.15
 sentence-transformers==2.2.2
 pdfplumber==0.9.0
 python-dotenv==1.0.0
