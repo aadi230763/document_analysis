@@ -911,7 +911,7 @@ def hackrx_run():
                     'section': chunks[j].get('section', ''),
                     'type': chunks[j].get('type', '')
                 })
-            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:5]  # Reduced from 10
+            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:8]  # Increased to 8 for broader evidence
             question_lower = question.lower()
             question_words = [word.strip('.,?!()[]{}"') for word in question_lower.split() if len(word.strip('.,?!()[]{}"')) > 2]
             insurance_keywords = []
@@ -946,14 +946,30 @@ def hackrx_run():
                 if matched_keywords:
                     chunk['matched_keywords'] = matched_keywords
                     keyword_chunks.append(chunk)
-            if keyword_chunks and len(keyword_chunks) >= 2:  # Reduced from 3
-                filtered_chunks = keyword_chunks[:4]  # Reduced from 8
+            if keyword_chunks and len(keyword_chunks) >= 2:
+                filtered_chunks = keyword_chunks[:7]
             else:
-                filtered_chunks = top_chunks[:4]  # Reduced from 8
+                filtered_chunks = top_chunks[:7]
             evidence_text = "\n\n".join([
-                f"Section {c.get('section','')}: {c['text'][:300]}..." for c in filtered_chunks
+                f"Section {c.get('section','')}: {c['text'][:400]}..." for c in filtered_chunks
             ])
-            prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.\n\nIMPORTANT INSTRUCTIONS:\n- Read ALL policy clauses carefully before answering\n- Look for specific details, conditions, and requirements\n- Start with "Yes," if coverage exists OR "No," if explicitly excluded\n- Include specific amounts, time periods, conditions, and requirements\n- Be comprehensive but concise (maximum 2 lines)\n- Only say "The policy does not specify" if absolutely no relevant information exists\n- Reference specific policy sections when possible\n\nQuestion: "{question}"\n\nPolicy Clauses:\n{evidence_text}\n\nAnswer as a single concise sentence:'''
+            prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.
+
+IMPORTANT INSTRUCTIONS:
+- Carefully read ALL policy clauses below before answering.
+- Quote or paraphrase the exact policy language when possible.
+- Reference the specific section, clause, or article number in your answer if available.
+- Provide a clear, specific answer (maximum 2 sentences, up to 300 characters).
+- Start with "Yes," if coverage exists, or "No," if explicitly excluded.
+- Include any amounts, time periods, or conditions as stated in the policy.
+- Only say "The policy does not specify" if there is truly no relevant information.
+
+Question: "{question}"
+
+Policy Clauses:
+{evidence_text}
+
+Answer (2 sentences max):'''
             answer = None
             try:
                 answer = gemini_generate(prompt, max_tokens=120, temperature=0.1)
@@ -980,8 +996,12 @@ def hackrx_run():
                 answer = answer.strip()
                 answer = re.sub(r'^\{"answer":\s*"|"\}$', '', answer)
                 answer = re.sub(r'^Answer:\s*', '', answer, flags=re.IGNORECASE)
-                # Only keep the first sentence or two lines
-                answer = answer.split('\n')[0].strip()
+                # Only keep up to two sentences (use period, question, or exclamation as delimiter)
+                sentences = re.split(r'(?<=[.!?])\s+', answer)
+                answer = ' '.join(sentences[:2]).strip()
+                # Limit to 300 characters for conciseness
+                if len(answer) > 300:
+                    answer = answer[:297].rstrip() + '...'
             else:
                 answer = "The policy does not specify this information."
             answers.append(answer)
