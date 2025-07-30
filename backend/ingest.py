@@ -1,6 +1,6 @@
 import pdfplumber
-import chromadb
-from chromadb.utils import embedding_functions
+
+
 from sentence_transformers import SentenceTransformer
 from config import *
 from pathlib import Path
@@ -24,13 +24,7 @@ from config import GEMINI_API_KEY, GEMINI_API_URL
 class EnhancedDocumentProcessor:
     def __init__(self):
         self.embedding_model = SentenceTransformer(str(EMBEDDING_MODEL))
-        self.client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        self.collection = self.client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name=str(EMBEDDING_MODEL)
-            )  # type: ignore
-        )
+        
 
     def clean_text(self, text: str) -> str:
         """Enhanced text cleaning"""

@@ -7,8 +7,8 @@ load_dotenv()
 from flask import Flask, request, jsonify
 import asyncio
 from config import *
-import chromadb
-from chromadb.utils import embedding_functions
+
+
 import requests
 from config import GEMINI_API_KEY, GEMINI_API_URL
 import atexit
@@ -329,25 +329,8 @@ def truncate_clauses_to_fit(clauses, prompt_prefix, max_tokens=2048, buffer=200)
         current_tokens += clause_tokens
     return truncated_clauses
 
-# Initialize components - only for legacy endpoints
-client = None
-collection = None
-
-# Only initialize ChromaDB if the collection exists (for legacy /query endpoint)
-try:
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    collection = client.get_collection(
-        name=COLLECTION_NAME,
-        embedding_function=embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=str(EMBEDDING_MODEL)
-        )  # type: ignore
-    )
-except Exception as e:
-    print(f"ChromaDB collection not found: {e}")
-    print("This is normal for the hackathon endpoint which processes documents at runtime")
-
 # Initialize our new components
-clause_retriever = ClauseRetriever(collection)
+clause_retriever = ClauseRetriever(None)
 response_formatter = ResponseFormatter()
 token_optimizer = TokenOptimizer()
 
