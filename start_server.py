@@ -76,14 +76,13 @@ def main():
     
     # Import and run the Flask app
     try:
-        import sys
-        sys.path.insert(0, str(backend_path))
         from app import app
         app.run(host='0.0.0.0', port=port, debug=False)
     except KeyboardInterrupt:
         print("\n🛑 Server stopped by user")
     except Exception as e:
         print(f"\n❌ Error starting server: {e}")
+        import sys
         sys.exit(1)
 
 if __name__ == "__main__":
