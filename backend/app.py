@@ -806,11 +806,11 @@ def hackrx_run():
         
         # Use singleton embedding function
         embedding_fn = get_embedding_function()
-        chunk_embeddings = embedding_fn(chunk_texts)
+        chunk_embeddings = embedding_fn.encode(chunk_texts)
         answers = []
         for i, question in enumerate(questions):
             print(f"Processing question {i+1}/{len(questions)}: {question}")
-            question_embedding = embedding_fn([question])[0]
+            question_embedding = embedding_fn.encode([question])[0]
             import numpy as np
             def cosine_sim(a, b):
                 a = np.array(a)
