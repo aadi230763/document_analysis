@@ -953,10 +953,10 @@ def hackrx_run():
             evidence_text = "\n\n".join([
                 f"Section {c.get('section','')}: {c['text'][:300]}..." for c in filtered_chunks
             ])
-            prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.\n\nIMPORTANT INSTRUCTIONS:\n- Read ALL policy clauses carefully before answering\n- Look for specific details, conditions, and requirements\n- Start with "Yes," if coverage exists OR "No," if explicitly excluded\n- Include specific amounts, time periods, conditions, and requirements\n- Be comprehensive but concise (maximum 2 lines)\n- Only say "The policy does not specify" if absolutely no relevant information exists\n- Reference specific policy sections when possible\n- For transparency, return your answer in the following JSON format:\n{{\n  "answer": "...",\n  "section_reference": "...",\n  "rationale": "..."}}\n\nQuestion: "{question}"\n\nPolicy Clauses:\n{evidence_text}\n\nJSON Answer:'''
+            prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.\n\nIMPORTANT INSTRUCTIONS:\n- Read ALL policy clauses carefully before answering\n- Look for specific details, conditions, and requirements\n- Start with "Yes," if coverage exists OR "No," if explicitly excluded\n- Include specific amounts, time periods, conditions, and requirements\n- Be comprehensive but concise (maximum 2 lines)\n- Only say "The policy does not specify" if absolutely no relevant information exists\n- Reference specific policy sections when possible\n\nQuestion: "{question}"\n\nPolicy Clauses:\n{evidence_text}\n\nAnswer as a single concise sentence:'''
             answer = None
             try:
-                answer = gemini_generate(prompt, max_tokens=250, temperature=0.1)
+                answer = gemini_generate(prompt, max_tokens=120, temperature=0.1)
                 if not answer or 'error' in answer.lower() or 'timed out' in answer.lower():
                     raise Exception('Gemini failed')
             except Exception as e:
@@ -965,7 +965,7 @@ def hackrx_run():
                     response = co.generate(
                         model='command-r-plus',
                         prompt=prompt,
-                        max_tokens=250,
+                        max_tokens=120,
                         temperature=0.1
                     )
                     answer = response.generations[0].text.strip()
@@ -973,51 +973,21 @@ def hackrx_run():
                         raise Exception('Cohere returned empty response')
                 except Exception as e:
                     print(f"Cohere error for question {i+1}: {str(e)}")
-                    answer = '{"answer": "The policy does not specify this information.", "section_reference": "", "rationale": ""}'
-            # Parse LLM output as JSON (fallback to heuristic if parse fails)
-            import json as _json
-            structured = None
-            try:
-                structured = _json.loads(answer)
-            except Exception:
-                # Fallback: extract fields using regex
+                    answer = "The policy does not specify this information."
+            if answer:
+                # Clean up answer: remove any leading/trailing quotes, whitespace, or JSON remnants
                 import re
-                ans = answer.strip()
-                answer_field = ans
-                section_ref = ''
-                rationale = ''
-                section_match = re.search(r'(Section|Clause|Article)\s+[\w\d\.\-]+', ans)
-                if section_match:
-                    section_ref = section_match.group(0)
-                rationale_match = re.search(r'(because|as per|according to)[\s\S]+', ans, re.IGNORECASE)
-                if rationale_match:
-                    rationale = rationale_match.group(0).strip()
-                structured = {
-                    'answer': answer_field,
-                    'section_reference': section_ref,
-                    'rationale': rationale
-                }
-            # Compose evidence_chunks for transparency
-            evidence_chunks = [
-                {
-                    'section': c.get('section', ''),
-                    'text': c['text'][:600],
-                    'relevance_score': round(float(c['relevance_score']), 4)
-                }
-                for c in filtered_chunks
-            ]
-            # Structured answer JSON
-            answers.append({
-                'question': question,
-                'answer': structured.get('answer',''),
-                'section_reference': structured.get('section_reference','') or filtered_chunks[0].get('section',''),
-                'rationale': structured.get('rationale',''),
-                'evidence_chunks': evidence_chunks
-            })
-            print(f"Structured Answer {i+1}: {structured}")
+                answer = answer.strip()
+                answer = re.sub(r'^\{"answer":\s*"|"\}$', '', answer)
+                answer = re.sub(r'^Answer:\s*', '', answer, flags=re.IGNORECASE)
+                # Only keep the first sentence or two lines
+                answer = answer.split('\n')[0].strip()
+            else:
+                answer = "The policy does not specify this information."
+            answers.append(answer)
+            print(f"Answer {i+1}: {answer}")
         response_data = {
-            "answers": answers,
-            "response_time_ms": tracker.get_response_time_ms()
+            "answers": answers
         }
         return jsonify(response_data)
     except Exception as e:
