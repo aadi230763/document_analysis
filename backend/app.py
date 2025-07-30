@@ -1028,7 +1028,6 @@ def hackrx_run():
 
 def semantic_chunking(text):
     """Semantic chunking function for document processing"""
-{{ ... }}
     paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
     chunks = []
     
