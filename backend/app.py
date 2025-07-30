@@ -97,19 +97,56 @@ def parse_document_from_url(url):
                     full_text = '\n'.join(all_text)
                 except Exception as ocr_e:
                     logger.error(f"PDF OCR failed: {ocr_e}")
-            # --- Smart chunking: by paragraphs/sections, not by page ---
+            # --- Section-aware chunking ---
             chunks = []
-            # If document is small, use as one chunk
-            if len(full_text.split()) < 2000:  # Reduced from 4000
-                add_chunk(chunks, full_text, section='Full PDF', chunk_type='pdf_full')
+            def extract_section_headers(text):
+                patterns = [
+                    r'^(?:Section|Clause|Article)\s+\d+[\.\d]*\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+                    r'^(?:Coverage|Benefits|Exclusions|Limitations|Terms|Conditions)\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+                    r'^(?:Policy|Insurance|Premium|Claim|Deductible|Co-pay)\s+[A-Z][A-Za-z\s]+$',
+                    r'^\d+\.\s+[A-Z][A-Za-z\s]+$',
+                    r'^[A-Z][A-Z\s]{3,}$',
+                ]
+                headers = []
+                for pattern in patterns:
+                    headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
+                return sorted(set(headers), key=lambda h: text.find(h))
+            headers = extract_section_headers(full_text)
+            if headers:
+                header_positions = [(m.start(), m.group()) for h in headers for m in re.finditer(re.escape(h), full_text)]
+                header_positions = sorted(header_positions, key=lambda x: x[0])
+                for idx, (pos, header) in enumerate(header_positions):
+                    start = pos
+                    end = header_positions[idx + 1][0] if idx + 1 < len(header_positions) else len(full_text)
+                    section_text = full_text[start:end].strip()
+                    if len(section_text.split()) > 350:
+                        paras = [p.strip() for p in section_text.split('\n\n') if len(p.strip()) > 0]
+                        for para in paras:
+                            if len(para.split()) < 15:
+                                continue
+                            if len(para.split()) > 350:
+                                sents = re.split(r'(?<=[.!?])\s+', para)
+                                current_chunk = []
+                                current_len = 0
+                                for sent in sents:
+                                    sent_len = len(sent.split())
+                                    if current_len + sent_len > 200 and current_chunk:
+                                        add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='pdf_section')
+                                        current_chunk = []
+                                        current_len = 0
+                                    current_chunk.append(sent)
+                                    current_len += sent_len
+                                if current_chunk:
+                                    add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='pdf_section')
+                            else:
+                                add_chunk(chunks, para, section=header, chunk_type='pdf_section')
+                    else:
+                        add_chunk(chunks, section_text, section=header, chunk_type='pdf_section')
             else:
-                # Split by double newlines or headings
                 paras = re.split(r'\n\s*\n', full_text)
-                chunk_count = 0
                 for para in paras:
-                    if len(para.split()) > 15 and chunk_count < 30:  # Reduced from 20, added limit
+                    if len(para.split()) > 15:
                         add_chunk(chunks, para, section='PDF Section', chunk_type='pdf_section')
-                        chunk_count += 1
             return [c for c in chunks if c['text']]
         except Exception as e:
             logger.error(f"PDF parsing failed: {e}\n{traceback.format_exc()}")
@@ -119,9 +156,58 @@ def parse_document_from_url(url):
         try:
             docx_stream = BytesIO(content)
             doc = docx.Document(docx_stream)
+            full_text = '\n'.join([para.text for para in doc.paragraphs if para.text.strip()])
+            # Section-aware chunking for DOCX
             chunks = []
-            for para in doc.paragraphs:
-                add_chunk(chunks, para.text, section=para.style.name if para.style else None, chunk_type='docx_paragraph')
+            def extract_section_headers(text):
+                patterns = [
+                    r'^(?:Section|Clause|Article)\s+\d+[\.\d]*\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+                    r'^(?:Coverage|Benefits|Exclusions|Limitations|Terms|Conditions)\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+                    r'^(?:Policy|Insurance|Premium|Claim|Deductible|Co-pay)\s+[A-Z][A-Za-z\s]+$',
+                    r'^\d+\.\s+[A-Z][A-Za-z\s]+$',
+                    r'^[A-Z][A-Z\s]{3,}$',
+                ]
+                headers = []
+                for pattern in patterns:
+                    headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
+                return sorted(set(headers), key=lambda h: text.find(h))
+            headers = extract_section_headers(full_text)
+            if headers:
+                header_positions = [(m.start(), m.group()) for h in headers for m in re.finditer(re.escape(h), full_text)]
+                header_positions = sorted(header_positions, key=lambda x: x[0])
+                for idx, (pos, header) in enumerate(header_positions):
+                    start = pos
+                    end = header_positions[idx + 1][0] if idx + 1 < len(header_positions) else len(full_text)
+                    section_text = full_text[start:end].strip()
+                    if len(section_text.split()) > 350:
+                        paras = [p.strip() for p in section_text.split('\n\n') if len(p.strip()) > 0]
+                        for para in paras:
+                            if len(para.split()) < 15:
+                                continue
+                            if len(para.split()) > 350:
+                                sents = re.split(r'(?<=[.!?])\s+', para)
+                                current_chunk = []
+                                current_len = 0
+                                for sent in sents:
+                                    sent_len = len(sent.split())
+                                    if current_len + sent_len > 200 and current_chunk:
+                                        add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='docx_section')
+                                        current_chunk = []
+                                        current_len = 0
+                                    current_chunk.append(sent)
+                                    current_len += sent_len
+                                if current_chunk:
+                                    add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='docx_section')
+                            else:
+                                add_chunk(chunks, para, section=header, chunk_type='docx_section')
+                    else:
+                        add_chunk(chunks, section_text, section=header, chunk_type='docx_section')
+            else:
+                # Fallback: paragraph-based chunking
+                for para in doc.paragraphs:
+                    if para.text.strip() and len(para.text.split()) > 15:
+                        add_chunk(chunks, para.text, section=para.style.name if para.style else None, chunk_type='docx_paragraph')
+            # Add tables as separate chunks
             for t_idx, table in enumerate(doc.tables):
                 table_text = '\n'.join([' | '.join(cell.text.strip() for cell in row.cells) for row in table.rows])
                 add_chunk(chunks, table_text, section=f"Table {t_idx+1}", table=table_text, chunk_type='docx_table')
@@ -865,12 +951,12 @@ def hackrx_run():
             else:
                 filtered_chunks = top_chunks[:4]  # Reduced from 8
             evidence_text = "\n\n".join([
-                f"Section {c.get('section','')}: {c['text'][:300]}..." for c in filtered_chunks  # Reduced from 600
+                f"Section {c.get('section','')}: {c['text'][:300]}..." for c in filtered_chunks
             ])
-            prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.\n\nIMPORTANT INSTRUCTIONS:\n- Read ALL policy clauses carefully before answering\n- Look for specific details, conditions, and requirements\n- Start with "Yes," if coverage exists OR "No," if explicitly excluded\n- Include specific amounts, time periods, conditions, and requirements\n- Be comprehensive but concise (maximum 2 lines)\n- Only say "The policy does not specify" if absolutely no relevant information exists\n- Reference specific policy sections when possible\n\nQuestion: "{question}"\n\nPolicy Clauses:\n{evidence_text}\n\nAnswer:'''
+            prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.\n\nIMPORTANT INSTRUCTIONS:\n- Read ALL policy clauses carefully before answering\n- Look for specific details, conditions, and requirements\n- Start with "Yes," if coverage exists OR "No," if explicitly excluded\n- Include specific amounts, time periods, conditions, and requirements\n- Be comprehensive but concise (maximum 2 lines)\n- Only say "The policy does not specify" if absolutely no relevant information exists\n- Reference specific policy sections when possible\n- For transparency, return your answer in the following JSON format:\n{{\n  "answer": "...",\n  "section_reference": "...",\n  "rationale": "..."}}\n\nQuestion: "{question}"\n\nPolicy Clauses:\n{evidence_text}\n\nJSON Answer:'''
             answer = None
             try:
-                answer = gemini_generate(prompt, max_tokens=150, temperature=0.1)
+                answer = gemini_generate(prompt, max_tokens=250, temperature=0.1)
                 if not answer or 'error' in answer.lower() or 'timed out' in answer.lower():
                     raise Exception('Gemini failed')
             except Exception as e:
@@ -879,7 +965,7 @@ def hackrx_run():
                     response = co.generate(
                         model='command-r-plus',
                         prompt=prompt,
-                        max_tokens=150,
+                        max_tokens=250,
                         temperature=0.1
                     )
                     answer = response.generations[0].text.strip()
@@ -887,22 +973,48 @@ def hackrx_run():
                         raise Exception('Cohere returned empty response')
                 except Exception as e:
                     print(f"Cohere error for question {i+1}: {str(e)}")
-                    answer = "The policy does not specify this information."
-            if answer:
-                answer = answer.strip()
-                answer_lower = answer.lower()
-                if answer_lower.startswith('yes') and not answer.startswith('Yes,'):
-                    answer = f"Yes, {answer[3:].lstrip(',').strip()}"
-                elif answer_lower.startswith('no') and not answer.startswith('No,'):
-                    answer = f"No, {answer[2:].lstrip(',').strip()}"
-                lines = answer.split('\n')
-                if len(lines) > 2:
-                    answer = '\n'.join(lines[:2])
-                words = answer.split()
-                if len(words) > 50:
-                    answer = ' '.join(words[:50])
-            answers.append(answer)
-            print(f"Answer {i+1}: {answer}")
+                    answer = '{"answer": "The policy does not specify this information.", "section_reference": "", "rationale": ""}'
+            # Parse LLM output as JSON (fallback to heuristic if parse fails)
+            import json as _json
+            structured = None
+            try:
+                structured = _json.loads(answer)
+            except Exception:
+                # Fallback: extract fields using regex
+                import re
+                ans = answer.strip()
+                answer_field = ans
+                section_ref = ''
+                rationale = ''
+                section_match = re.search(r'(Section|Clause|Article)\s+[\w\d\.\-]+', ans)
+                if section_match:
+                    section_ref = section_match.group(0)
+                rationale_match = re.search(r'(because|as per|according to)[\s\S]+', ans, re.IGNORECASE)
+                if rationale_match:
+                    rationale = rationale_match.group(0).strip()
+                structured = {
+                    'answer': answer_field,
+                    'section_reference': section_ref,
+                    'rationale': rationale
+                }
+            # Compose evidence_chunks for transparency
+            evidence_chunks = [
+                {
+                    'section': c.get('section', ''),
+                    'text': c['text'][:600],
+                    'relevance_score': round(float(c['relevance_score']), 4)
+                }
+                for c in filtered_chunks
+            ]
+            # Structured answer JSON
+            answers.append({
+                'question': question,
+                'answer': structured.get('answer',''),
+                'section_reference': structured.get('section_reference','') or filtered_chunks[0].get('section',''),
+                'rationale': structured.get('rationale',''),
+                'evidence_chunks': evidence_chunks
+            })
+            print(f"Structured Answer {i+1}: {structured}")
         response_data = {
             "answers": answers,
             "response_time_ms": tracker.get_response_time_ms()
@@ -916,7 +1028,7 @@ def hackrx_run():
 
 def semantic_chunking(text):
     """Semantic chunking function for document processing"""
-    # Split by paragraphs first
+{{ ... }}
     paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
     chunks = []
     

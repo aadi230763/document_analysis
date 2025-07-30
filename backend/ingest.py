@@ -158,51 +158,115 @@ Text: {text[:1000]}"""
             return ''
 
     def semantic_chunking(self, text: str) -> List[Dict[str, any]]:
-        """Section/paragraph-based chunking with quality scoring"""
-        # Split by double newlines (paragraphs)
-        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
-        chunks = []
-        for para in paragraphs:
-            if len(para.split()) < MIN_CHUNK_LENGTH:
-                continue
-            # If paragraph is too long, split further by sentences
-            if len(para.split()) > CHUNK_SIZE:
-                sentences = re.split(r'(?<=[.!?])\s+', para)
-                current_chunk = []
-                current_len = 0
-                for sent in sentences:
-                    sent_len = len(sent.split())
-                    if current_len + sent_len > CHUNK_SIZE and current_chunk:
+        """Section-aware chunking with clause/heading metadata for precision retrieval"""
+        import re
+        headers = self.extract_insurance_section_headers(text)
+        if headers:
+            header_positions = [(m.start(), m.group()) for h in headers for m in re.finditer(re.escape(h), text)]
+            header_positions = sorted(header_positions, key=lambda x: x[0])
+            chunks = []
+            for idx, (pos, header) in enumerate(header_positions):
+                start = pos
+                end = header_positions[idx + 1][0] if idx + 1 < len(header_positions) else len(text)
+                section_text = text[start:end].strip()
+                if len(section_text.split()) > 350:
+                    paras = [p.strip() for p in section_text.split('\n\n') if len(p.strip()) > 0]
+                    for para in paras:
+                        if len(para.split()) < MIN_CHUNK_LENGTH:
+                            continue
+                        if len(para.split()) > 350:
+                            sents = re.split(r'(?<=[.!?])\s+', para)
+                            current_chunk = []
+                            current_len = 0
+                            for sent in sents:
+                                sent_len = len(sent.split())
+                                if current_len + sent_len > 200 and current_chunk:
+                                    chunk_text = ' '.join(current_chunk)
+                                    quality_score = self._calculate_chunk_quality(chunk_text)
+                                    chunks.append({
+                                        'text': chunk_text,
+                                        'section': header,
+                                        'quality_score': quality_score,
+                                        'word_count': len(chunk_text.split()),
+                                        'sentences': len(current_chunk)
+                                    })
+                                    current_chunk = []
+                                    current_len = 0
+                                current_chunk.append(sent)
+                                current_len += sent_len
+                            if current_chunk:
+                                chunk_text = ' '.join(current_chunk)
+                                quality_score = self._calculate_chunk_quality(chunk_text)
+                                chunks.append({
+                                    'text': chunk_text,
+                                    'section': header,
+                                    'quality_score': quality_score,
+                                    'word_count': len(chunk_text.split()),
+                                    'sentences': len(current_chunk)
+                                })
+                        else:
+                            quality_score = self._calculate_chunk_quality(para)
+                            chunks.append({
+                                'text': para,
+                                'section': header,
+                                'quality_score': quality_score,
+                                'word_count': len(para.split()),
+                                'sentences': para.count('.') + para.count('!') + para.count('?')
+                            })
+                else:
+                    quality_score = self._calculate_chunk_quality(section_text)
+                    chunks.append({
+                        'text': section_text,
+                        'section': header,
+                        'quality_score': quality_score,
+                        'word_count': len(section_text.split()),
+                        'sentences': section_text.count('.') + section_text.count('!') + section_text.count('?')
+                    })
+        else:
+            paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
+            chunks = []
+            for para in paragraphs:
+                if len(para.split()) < MIN_CHUNK_LENGTH:
+                    continue
+                if len(para.split()) > 350:
+                    sents = re.split(r'(?<=[.!?])\s+', para)
+                    current_chunk = []
+                    current_len = 0
+                    for sent in sents:
+                        sent_len = len(sent.split())
+                        if current_len + sent_len > 200 and current_chunk:
+                            chunk_text = ' '.join(current_chunk)
+                            quality_score = self._calculate_chunk_quality(chunk_text)
+                            chunks.append({
+                                'text': chunk_text,
+                                'section': None,
+                                'quality_score': quality_score,
+                                'word_count': len(chunk_text.split()),
+                                'sentences': len(current_chunk)
+                            })
+                            current_chunk = []
+                            current_len = 0
+                        current_chunk.append(sent)
+                        current_len += sent_len
+                    if current_chunk:
                         chunk_text = ' '.join(current_chunk)
                         quality_score = self._calculate_chunk_quality(chunk_text)
                         chunks.append({
                             'text': chunk_text,
+                            'section': None,
                             'quality_score': quality_score,
                             'word_count': len(chunk_text.split()),
                             'sentences': len(current_chunk)
                         })
-                        current_chunk = []
-                        current_len = 0
-                    current_chunk.append(sent)
-                    current_len += sent_len
-                if current_chunk:
-                    chunk_text = ' '.join(current_chunk)
-                    quality_score = self._calculate_chunk_quality(chunk_text)
+                else:
+                    quality_score = self._calculate_chunk_quality(para)
                     chunks.append({
-                        'text': chunk_text,
+                        'text': para,
+                        'section': None,
                         'quality_score': quality_score,
-                        'word_count': len(chunk_text.split()),
-                        'sentences': len(current_chunk)
+                        'word_count': len(para.split()),
+                        'sentences': para.count('.') + para.count('!') + para.count('?')
                     })
-            else:
-                quality_score = self._calculate_chunk_quality(para)
-                chunks.append({
-                    'text': para,
-                    'quality_score': quality_score,
-                    'word_count': len(para.split()),
-                    'sentences': para.count('.') + para.count('!') + para.count('?')
-                })
-        # Filter by quality and minimum length
         return [chunk for chunk in chunks 
                 if chunk['word_count'] >= MIN_CHUNK_LENGTH 
                 and chunk['quality_score'] >= 0.3]
