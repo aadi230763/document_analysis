@@ -71,6 +71,87 @@ def parse_document_from_url(url):
                 'type': chunk_type or ''
             })
 
+    def extract_section_headers(text):
+        """Enhanced section header extraction for insurance documents"""
+        patterns = [
+            r'^(?:Section|Clause|Article)\s+\d+[\.\d]*\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+            r'^(?:Coverage|Benefits|Exclusions|Limitations|Terms|Conditions)\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+            r'^(?:Policy|Insurance|Premium|Claim|Deductible|Co-pay|Coinsurance)\s+[A-Z][A-Za-z\s]+$',
+            r'^\d+\.\s+[A-Z][A-Z\s]{3,}$',
+            r'^[A-Z][A-Z\s]{3,}$',
+            r'^(?:Grace|Waiting|Exclusion|Inclusion|Coverage|Benefit)\s+Period\s*[:\-]?\s*[A-Z][A-Za-z\s]*$',
+            r'^(?:Network|Non-Network|In-Network|Out-of-Network)\s+[A-Z][A-Za-z\s]+$',
+            r'^(?:Pre-existing|Pre-existing Condition)\s*[:\-]?\s*[A-Z][A-Za-z\s]*$',
+        ]
+        headers = []
+        for pattern in patterns:
+            headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
+        return sorted(set(headers), key=lambda h: text.find(h))
+
+    def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=800):
+        """Improved semantic chunking with better context preservation"""
+        if not text.strip():
+            return []
+        
+        chunks = []
+        
+        # Split by paragraphs first
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
+        
+        # If no paragraphs, split by sentences
+        if not paragraphs:
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+            paragraphs = [s.strip() for s in sentences if len(s.strip()) > 0]
+        
+        # If still no content, use the whole text as one chunk
+        if not paragraphs:
+            if len(text.strip()) > 0:
+                return [{'text': text.strip(), 'section': section_name, 'type': chunk_type}]
+            return []
+        
+        current_chunk = []
+        current_length = 0
+        
+        for para in paragraphs:
+            para_words = len(para.split())
+            
+            # Skip very short paragraphs unless they're the only content
+            if para_words < 5 and len(paragraphs) > 1:
+                continue
+            
+            # If paragraph is too long, split it by sentences
+            if para_words > max_chunk_size // 4:  # Approximate word count
+                sentences = re.split(r'(?<=[.!?])\s+', para)
+                for sent in sentences:
+                    sent_words = len(sent.split())
+                    
+                    # If adding this sentence would exceed limit, save current chunk
+                    if current_length + sent_words > max_chunk_size // 4 and current_chunk:
+                        chunk_text = ' '.join(current_chunk)
+                        add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
+                        current_chunk = [sent]
+                        current_length = sent_words
+                    else:
+                        current_chunk.append(sent)
+                        current_length += sent_words
+            else:
+                # If adding this paragraph would exceed limit, save current chunk
+                if current_length + para_words > max_chunk_size // 4 and current_chunk:
+                    chunk_text = ' '.join(current_chunk)
+                    add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
+                    current_chunk = [para]
+                    current_length = para_words
+                else:
+                    current_chunk.append(para)
+                    current_length += para_words
+        
+        # Add remaining content as final chunk
+        if current_chunk:
+            chunk_text = ' '.join(current_chunk)
+            add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
+        
+        return chunks
+
     # --- Improved PDF logic ---
     if ext == '.pdf' or 'pdf' in content_type:
         try:
@@ -81,12 +162,14 @@ def parse_document_from_url(url):
                 text = page.extract_text() or ''
                 all_text.append(text)
             full_text = '\n'.join(all_text)
+            
             # If no text, fallback to pdfplumber
             if not full_text.strip():
                 pdf_stream.seek(0)
                 with pdfplumber.open(pdf_stream) as pdf:
                     all_text = [page.extract_text() or '' for page in pdf.pages]
                 full_text = '\n'.join(all_text)
+            
             # If still no text, fallback to OCR
             if not full_text.strip():
                 try:
@@ -97,123 +180,77 @@ def parse_document_from_url(url):
                     full_text = '\n'.join(all_text)
                 except Exception as ocr_e:
                     logger.error(f"PDF OCR failed: {ocr_e}")
-            # --- Section-aware chunking ---
+            
+            # Enhanced section-aware chunking
             chunks = []
-            def extract_section_headers(text):
-                patterns = [
-                    r'^(?:Section|Clause|Article)\s+\d+[\.\d]*\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
-                    r'^(?:Coverage|Benefits|Exclusions|Limitations|Terms|Conditions)\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
-                    r'^(?:Policy|Insurance|Premium|Claim|Deductible|Co-pay)\s+[A-Z][A-Za-z\s]+$',
-                    r'^\d+\.\s+[A-Z][A-Za-z\s]+$',
-                    r'^[A-Z][A-Z\s]{3,}$',
-                ]
-                headers = []
-                for pattern in patterns:
-                    headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
-                return sorted(set(headers), key=lambda h: text.find(h))
             headers = extract_section_headers(full_text)
+            
             if headers:
+                # Section-based chunking
                 header_positions = [(m.start(), m.group()) for h in headers for m in re.finditer(re.escape(h), full_text)]
                 header_positions = sorted(header_positions, key=lambda x: x[0])
+                
                 for idx, (pos, header) in enumerate(header_positions):
                     start = pos
                     end = header_positions[idx + 1][0] if idx + 1 < len(header_positions) else len(full_text)
                     section_text = full_text[start:end].strip()
-                    if len(section_text.split()) > 350:
-                        paras = [p.strip() for p in section_text.split('\n\n') if len(p.strip()) > 0]
-                        for para in paras:
-                            if len(para.split()) < 15:
-                                continue
-                            if len(para.split()) > 350:
-                                sents = re.split(r'(?<=[.!?])\s+', para)
-                                current_chunk = []
-                                current_len = 0
-                                for sent in sents:
-                                    sent_len = len(sent.split())
-                                    if current_len + sent_len > 200 and current_chunk:
-                                        add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='pdf_section')
-                                        current_chunk = []
-                                        current_len = 0
-                                    current_chunk.append(sent)
-                                    current_len += sent_len
-                                if current_chunk:
-                                    add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='pdf_section')
-                            else:
-                                add_chunk(chunks, para, section=header, chunk_type='pdf_section')
-                    else:
-                        add_chunk(chunks, section_text, section=header, chunk_type='pdf_section')
+                    
+                    if section_text:
+                        section_chunks = smart_chunk_text(section_text, section=header, chunk_type='pdf_section')
+                        chunks.extend(section_chunks)
             else:
-                paras = re.split(r'\n\s*\n', full_text)
-                for para in paras:
-                    if len(para.split()) > 15:
-                        add_chunk(chunks, para, section='PDF Section', chunk_type='pdf_section')
+                # Fallback to paragraph-based chunking
+                chunks = smart_chunk_text(full_text, section='PDF Document', chunk_type='pdf_section')
+            
             return [c for c in chunks if c['text']]
+            
         except Exception as e:
             logger.error(f"PDF parsing failed: {e}\n{traceback.format_exc()}")
             # Fallback to plain text
-    # --- DOCX and EML logic unchanged ---
+    
+    # --- Improved DOCX logic ---
     if ext == '.docx' or 'word' in content_type or 'docx' in content_type:
         try:
             docx_stream = BytesIO(content)
             doc = docx.Document(docx_stream)
+            
+            # Extract all text with structure
             full_text = '\n'.join([para.text for para in doc.paragraphs if para.text.strip()])
-            # Section-aware chunking for DOCX
+            
             chunks = []
-            def extract_section_headers(text):
-                patterns = [
-                    r'^(?:Section|Clause|Article)\s+\d+[\.\d]*\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
-                    r'^(?:Coverage|Benefits|Exclusions|Limitations|Terms|Conditions)\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
-                    r'^(?:Policy|Insurance|Premium|Claim|Deductible|Co-pay)\s+[A-Z][A-Za-z\s]+$',
-                    r'^\d+\.\s+[A-Z][A-Za-z\s]+$',
-                    r'^[A-Z][A-Z\s]{3,}$',
-                ]
-                headers = []
-                for pattern in patterns:
-                    headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
-                return sorted(set(headers), key=lambda h: text.find(h))
             headers = extract_section_headers(full_text)
+            
             if headers:
+                # Section-based chunking for DOCX
                 header_positions = [(m.start(), m.group()) for h in headers for m in re.finditer(re.escape(h), full_text)]
                 header_positions = sorted(header_positions, key=lambda x: x[0])
+                
                 for idx, (pos, header) in enumerate(header_positions):
                     start = pos
                     end = header_positions[idx + 1][0] if idx + 1 < len(header_positions) else len(full_text)
                     section_text = full_text[start:end].strip()
-                    if len(section_text.split()) > 350:
-                        paras = [p.strip() for p in section_text.split('\n\n') if len(p.strip()) > 0]
-                        for para in paras:
-                            if len(para.split()) < 15:
-                                continue
-                            if len(para.split()) > 350:
-                                sents = re.split(r'(?<=[.!?])\s+', para)
-                                current_chunk = []
-                                current_len = 0
-                                for sent in sents:
-                                    sent_len = len(sent.split())
-                                    if current_len + sent_len > 200 and current_chunk:
-                                        add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='docx_section')
-                                        current_chunk = []
-                                        current_len = 0
-                                    current_chunk.append(sent)
-                                    current_len += sent_len
-                                if current_chunk:
-                                    add_chunk(chunks, ' '.join(current_chunk), section=header, chunk_type='docx_section')
-                            else:
-                                add_chunk(chunks, para, section=header, chunk_type='docx_section')
-                    else:
-                        add_chunk(chunks, section_text, section=header, chunk_type='docx_section')
+                    
+                    if section_text:
+                        section_chunks = smart_chunk_text(section_text, section=header, chunk_type='docx_section')
+                        chunks.extend(section_chunks)
             else:
-                # Fallback: paragraph-based chunking
+                # Fallback to paragraph-based chunking
                 for para in doc.paragraphs:
-                    if para.text.strip() and len(para.text.split()) > 15:
+                    if para.text.strip() and len(para.text.split()) > 10:
                         add_chunk(chunks, para.text, section=para.style.name if para.style else None, chunk_type='docx_paragraph')
+            
             # Add tables as separate chunks
             for t_idx, table in enumerate(doc.tables):
                 table_text = '\n'.join([' | '.join(cell.text.strip() for cell in row.cells) for row in table.rows])
-                add_chunk(chunks, table_text, section=f"Table {t_idx+1}", table=table_text, chunk_type='docx_table')
+                if table_text.strip():
+                    add_chunk(chunks, table_text, section=f"Table {t_idx+1}", table=table_text, chunk_type='docx_table')
+            
             return [c for c in chunks if c['text']]
+            
         except Exception as e:
             logger.error(f"DOCX parsing failed: {e}\n{traceback.format_exc()}")
+    
+    # --- EML logic ---
     if ext == '.eml' or 'message/rfc822' in content_type or 'eml' in content_type:
         try:
             msg = BytesParser(policy=policy.default).parsebytes(content)
@@ -224,13 +261,17 @@ def parse_document_from_url(url):
                         text += part.get_content() + '\n'
             else:
                 text = msg.get_content()
-            add_chunk(chunks := [], text, section='email_body', chunk_type='eml')
+            
+            chunks = smart_chunk_text(text, section='Email Body', chunk_type='eml')
             return [c for c in chunks if c['text']]
+            
         except Exception as e:
             logger.error(f"EML parsing failed: {e}\n{traceback.format_exc()}")
+    
+    # --- Plain text fallback ---
     try:
         text = content.decode(errors='ignore')
-        add_chunk(chunks := [], text, section='plain_text', chunk_type='plain')
+        chunks = smart_chunk_text(text, section='Plain Text', chunk_type='plain')
         return [c for c in chunks if c['text']]
     except Exception as e:
         logger.error(f"Plain text parsing failed: {e}\n{traceback.format_exc()}")
@@ -870,6 +911,7 @@ def hackrx_run():
         questions = data.get('questions', [])
         if not documents:
             return jsonify({"error": "No documents provided"}), 400
+        
         # --- Robust question handling ---
         if isinstance(questions, str):
             questions = [questions]
@@ -877,139 +919,246 @@ def hackrx_run():
             return jsonify({"error": "Questions must be a string or a non-empty array"}), 400
         if not questions or not all(isinstance(q, str) and q.strip() for q in questions):
             return jsonify({"error": "Questions must be a non-empty string or array of non-empty strings"}), 400
+        
         print(f"Processing {len(questions)} questions for document: {documents}")
-        # --- Use new robust parser ---
+        
+        # --- Use improved robust parser ---
         try:
             chunks = parse_document_from_url(documents)
         except Exception as e:
             logger.error(f"Document parsing failed: {e}")
             return jsonify({"error": f"Failed to download or process document: {e}"}), 400
+        
         if not chunks:
             return jsonify({"error": "No valid text chunks found in document"}), 400
-        # Limit chunks to reduce memory usage
-        max_chunks = 20  # Reduced from unlimited
-        chunk_texts = [c['text'] for c in chunks[:max_chunks]]
+        
+        print(f"Extracted {len(chunks)} chunks from document")
+        
+        # --- Enhanced chunk processing ---
+        # Filter out very short chunks and clean up text
+        processed_chunks = []
+        for chunk in chunks:
+            if chunk['text'] and len(chunk['text'].strip()) > 20:  # Minimum 20 characters
+                # Clean up text
+                cleaned_text = re.sub(r'\s+', ' ', chunk['text'].strip())
+                if len(cleaned_text) > 20:
+                    processed_chunks.append({
+                        'text': cleaned_text,
+                        'section': chunk.get('section', ''),
+                        'type': chunk.get('type', ''),
+                        'table': chunk.get('table', '')
+                    })
+        
+        if not processed_chunks:
+            return jsonify({"error": "No valid text chunks found after processing"}), 400
+        
+        print(f"Processed {len(processed_chunks)} valid chunks")
+        
+        # Limit chunks to reduce memory usage and improve performance
+        max_chunks = min(25, len(processed_chunks))  # Increased from 20
+        chunk_texts = [c['text'] for c in processed_chunks[:max_chunks]]
         
         # Use singleton embedding function
         embedding_fn = get_embedding_function()
         chunk_embeddings = embedding_fn.encode(chunk_texts)
+        
         answers = []
         for i, question in enumerate(questions):
             print(f"Processing question {i+1}/{len(questions)}: {question}")
+            
             question_embedding = embedding_fn.encode([question])[0]
+            
             import numpy as np
             def cosine_sim(a, b):
                 a = np.array(a)
                 b = np.array(b)
                 return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+            
+            # --- Enhanced scoring and retrieval ---
             scored_chunks = []
             for j, emb in enumerate(chunk_embeddings):
                 score = cosine_sim(question_embedding, emb)
                 scored_chunks.append({
                     'text': chunk_texts[j],
                     'relevance_score': score,
-                    'section': chunks[j].get('section', ''),
-                    'type': chunks[j].get('type', '')
+                    'section': processed_chunks[j].get('section', ''),
+                    'type': processed_chunks[j].get('type', ''),
+                    'table': processed_chunks[j].get('table', '')
                 })
-            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:8]  # Increased to 8 for broader evidence
+            
+            # Get more candidates for better coverage
+            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:12]
+            
+            # --- Enhanced keyword matching ---
             question_lower = question.lower()
             question_words = [word.strip('.,?!()[]{}"') for word in question_lower.split() if len(word.strip('.,?!()[]{}"')) > 2]
+            
+            # Comprehensive insurance keyword expansion
             insurance_keywords = []
-            if 'grace' in question_lower or 'period' in question_lower:
-                insurance_keywords.extend(['grace', 'period', 'grace period', 'thirty', '30', 'days', 'payment', 'premium', 'due', 'renewal'])
+            
+            # Grace period related
+            if any(word in question_lower for word in ['grace', 'period', 'payment', 'premium', 'due']):
+                insurance_keywords.extend(['grace', 'period', 'grace period', 'thirty', '30', 'days', 'payment', 'premium', 'due', 'renewal', 'continuity', 'late'])
+            
+            # Premium related
             if 'premium' in question_lower:
-                insurance_keywords.extend(['premium', 'payment', 'due', 'grace', 'renewal', 'continue', 'continuity'])
-            if 'waiting' in question_lower:
-                insurance_keywords.extend(['waiting', 'period', 'exclusion', 'months', 'days'])
-            if 'coverage' in question_lower or 'covered' in question_lower:
-                insurance_keywords.extend(['coverage', 'covered', 'benefit', 'include', 'exclude'])
-            if 'maternity' in question_lower:
-                insurance_keywords.extend(['maternity', 'pregnancy', 'childbirth', 'delivery', 'termination'])
-            if 'cataract' in question_lower:
-                insurance_keywords.extend(['cataract', 'surgery', 'eye', 'ophthalmic'])
-            if 'organ' in question_lower or 'donor' in question_lower:
-                insurance_keywords.extend(['organ', 'donor', 'transplantation', 'harvesting'])
-            if 'discount' in question_lower or 'ncd' in question_lower:
-                insurance_keywords.extend(['discount', 'ncd', 'no claim', 'renewal'])
-            if 'check' in question_lower or 'preventive' in question_lower:
-                insurance_keywords.extend(['check', 'preventive', 'health', 'examination'])
-            if 'hospital' in question_lower:
-                insurance_keywords.extend(['hospital', 'institution', 'beds', 'nursing', 'operation'])
-            if 'ayush' in question_lower:
+                insurance_keywords.extend(['premium', 'payment', 'due', 'grace', 'renewal', 'continue', 'continuity', 'amount', 'cost'])
+            
+            # Waiting period related
+            if any(word in question_lower for word in ['waiting', 'period', 'exclusion', 'pre-existing']):
+                insurance_keywords.extend(['waiting', 'period', 'exclusion', 'months', 'days', 'pre-existing', 'condition'])
+            
+            # Coverage related
+            if any(word in question_lower for word in ['coverage', 'covered', 'benefit', 'include', 'exclude']):
+                insurance_keywords.extend(['coverage', 'covered', 'benefit', 'include', 'exclude', 'eligible', 'ineligible'])
+            
+            # Medical procedures
+            if any(word in question_lower for word in ['maternity', 'pregnancy', 'childbirth']):
+                insurance_keywords.extend(['maternity', 'pregnancy', 'childbirth', 'delivery', 'termination', 'abortion'])
+            
+            if any(word in question_lower for word in ['cataract', 'surgery', 'eye']):
+                insurance_keywords.extend(['cataract', 'surgery', 'eye', 'ophthalmic', 'ophthalmology'])
+            
+            if any(word in question_lower for word in ['organ', 'donor', 'transplant']):
+                insurance_keywords.extend(['organ', 'donor', 'transplantation', 'harvesting', 'transplant'])
+            
+            # Discounts and claims
+            if any(word in question_lower for word in ['discount', 'ncd', 'claim']):
+                insurance_keywords.extend(['discount', 'ncd', 'no claim', 'renewal', 'bonus'])
+            
+            # Health checks
+            if any(word in question_lower for word in ['check', 'preventive', 'examination']):
+                insurance_keywords.extend(['check', 'preventive', 'health', 'examination', 'screening'])
+            
+            # Hospital related
+            if any(word in question_lower for word in ['hospital', 'room', 'icu']):
+                insurance_keywords.extend(['hospital', 'institution', 'beds', 'nursing', 'operation', 'room', 'icu', 'rent'])
+            
+            # Alternative medicine
+            if any(word in question_lower for word in ['ayush', 'ayurveda', 'yoga', 'homeopathy']):
                 insurance_keywords.extend(['ayush', 'ayurveda', 'yoga', 'naturopathy', 'unani', 'siddha', 'homeopathy'])
-            if 'room' in question_lower or 'icu' in question_lower:
-                insurance_keywords.extend(['room', 'icu', 'rent', 'charges', 'limit'])
+            
+            # Network related
+            if any(word in question_lower for word in ['network', 'in-network', 'out-network']):
+                insurance_keywords.extend(['network', 'in-network', 'out-network', 'provider', 'hospital'])
+            
+            # Amount and limits
+            if any(word in question_lower for word in ['amount', 'limit', 'maximum', 'sum']):
+                insurance_keywords.extend(['amount', 'limit', 'maximum', 'sum', 'insured', 'coverage'])
+            
             all_keywords = list(set(question_words + insurance_keywords))
+            
+            # --- Enhanced chunk filtering ---
             keyword_chunks = []
             for chunk in top_chunks:
-                matched_keywords = [kw for kw in all_keywords if kw in chunk['text'].lower()]
+                chunk_lower = chunk['text'].lower()
+                matched_keywords = [kw for kw in all_keywords if kw in chunk_lower]
                 if matched_keywords:
                     chunk['matched_keywords'] = matched_keywords
+                    chunk['keyword_score'] = len(matched_keywords)
                     keyword_chunks.append(chunk)
+            
+            # Use keyword-matched chunks if available, otherwise use top similarity chunks
             if keyword_chunks and len(keyword_chunks) >= 2:
-                filtered_chunks = keyword_chunks[:7]
+                # Sort by both keyword score and relevance score
+                keyword_chunks.sort(key=lambda x: (x['keyword_score'], x['relevance_score']), reverse=True)
+                filtered_chunks = keyword_chunks[:8]
             else:
-                filtered_chunks = top_chunks[:7]
-            evidence_text = "\n\n".join([
-                f"Section {c.get('section','')}: {c['text'][:400]}..." for c in filtered_chunks
-            ])
+                filtered_chunks = top_chunks[:8]
+            
+            # --- Enhanced evidence preparation ---
+            evidence_parts = []
+            for idx, chunk in enumerate(filtered_chunks):
+                section_info = f"Section: {chunk.get('section','')}" if chunk.get('section') else "Policy Document"
+                chunk_text = chunk['text'][:500] + "..." if len(chunk['text']) > 500 else chunk['text']
+                evidence_parts.append(f"{section_info}\n{chunk_text}")
+            
+            evidence_text = "\n\n---\n\n".join(evidence_parts)
+            
+            # --- Enhanced prompt for better accuracy ---
             prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.
 
 IMPORTANT INSTRUCTIONS:
-- Carefully read ALL policy clauses below before answering.
-- Quote or paraphrase the exact policy language when possible.
-- Reference the specific section, clause, or article number in your answer if available.
-- Provide a clear, specific answer (maximum 2 sentences, up to 300 characters).
-- Start with "Yes," if coverage exists, or "No," if explicitly excluded.
-- Include any amounts, time periods, or conditions as stated in the policy.
-- Only say "The policy does not specify" if there is truly no relevant information.
+- Read ALL policy clauses carefully before answering
+- Look for specific details, amounts, time periods, and conditions
+- Start with "Yes," if coverage exists OR "No," if explicitly excluded
+- Include specific amounts, time periods, conditions, and requirements when mentioned
+- Be comprehensive but concise (maximum 2 sentences, up to 300 characters)
+- Only say "The policy does not specify" if absolutely no relevant information exists
+- Reference specific policy sections when possible
+- If the answer involves conditions or limitations, mention them clearly
 
 Question: "{question}"
 
 Policy Clauses:
 {evidence_text}
 
-Answer (2 sentences max):'''
+Answer (be specific and accurate):'''
+            
+            # --- Enhanced answer generation with fallback ---
             answer = None
+            model_used = None
+            
             try:
-                answer = gemini_generate(prompt, max_tokens=120, temperature=0.1)
-                if not answer or 'error' in answer.lower() or 'timed out' in answer.lower():
-                    raise Exception('Gemini failed')
+                answer = gemini_generate(prompt, max_tokens=150, temperature=0.1)
+                if answer and 'error' not in answer.lower() and 'timed out' not in answer.lower():
+                    model_used = "gemini"
+                else:
+                    raise Exception('Gemini failed or returned error')
             except Exception as e:
                 print(f"Gemini error for question {i+1}: {str(e)}")
                 try:
                     response = co.generate(
                         model='command-r-plus',
                         prompt=prompt,
-                        max_tokens=120,
+                        max_tokens=150,
                         temperature=0.1
                     )
                     answer = response.generations[0].text.strip()
-                    if not answer:
+                    if answer:
+                        model_used = "cohere"
+                    else:
                         raise Exception('Cohere returned empty response')
                 except Exception as e:
                     print(f"Cohere error for question {i+1}: {str(e)}")
                     answer = "The policy does not specify this information."
+                    model_used = "none"
+            
+            # --- Enhanced answer cleaning ---
             if answer:
-                # Clean up answer: remove any leading/trailing quotes, whitespace, or JSON remnants
-                import re
+                # Clean up answer
                 answer = answer.strip()
                 answer = re.sub(r'^\{"answer":\s*"|"\}$', '', answer)
                 answer = re.sub(r'^Answer:\s*', '', answer, flags=re.IGNORECASE)
-                # Only keep up to two sentences (use period, question, or exclamation as delimiter)
+                
+                # Ensure proper sentence structure
+                answer_lower = answer.lower()
+                if answer_lower.startswith('yes') and not answer.startswith('Yes,'):
+                    answer = f"Yes, {answer[3:].lstrip(',').strip()}"
+                elif answer_lower.startswith('no') and not answer.startswith('No,'):
+                    answer = f"No, {answer[2:].lstrip(',').strip()}"
+                
+                # Limit to 2 sentences and 300 characters
                 sentences = re.split(r'(?<=[.!?])\s+', answer)
                 answer = ' '.join(sentences[:2]).strip()
-                # Limit to 300 characters for conciseness
+                
                 if len(answer) > 300:
                     answer = answer[:297].rstrip() + '...'
             else:
                 answer = "The policy does not specify this information."
+            
             answers.append(answer)
-            print(f"Answer {i+1}: {answer}")
+            print(f"Answer {i+1} ({model_used}): {answer}")
+        
         response_data = {
-            "answers": answers
+            "answers": answers,
+            "response_time_ms": tracker.get_response_time_ms(),
+            "chunks_processed": len(processed_chunks),
+            "questions_processed": len(questions)
         }
+        
         return jsonify(response_data)
+        
     except Exception as e:
         import traceback
         error_msg = f"Unexpected error in /hackrx/run: {str(e)}\n{traceback.format_exc()}"
@@ -1017,9 +1166,11 @@ Answer (2 sentences max):'''
         return jsonify({"error": error_msg, "response_time_ms": tracker.get_response_time_ms()}), 500
 
 def semantic_chunking(text):
-    """Semantic chunking function for document processing"""
+    """Enhanced semantic chunking function for document processing with better accuracy"""
+    from config import CHUNK_SIZE, MIN_CHUNK_LENGTH, MAX_CHUNK_CHARACTERS, MIN_CHUNK_CHARACTERS
+    
+    # Split by paragraphs first
     paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
-    chunks = []
     
     # If no paragraphs, split by sentences
     if not paragraphs:
@@ -1032,37 +1183,59 @@ def semantic_chunking(text):
             chunks.append({'text': text.strip()})
         return chunks
     
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    
     for para in paragraphs:
-        # Lower the minimum chunk length for small documents
-        min_length = min(MIN_CHUNK_LENGTH, 10)  # At least 10 words or config minimum
+        para_words = len(para.split())
         
-        if len(para.split()) < min_length:
+        # Skip very short paragraphs unless they're the only content
+        if para_words < MIN_CHUNK_LENGTH // 4 and len(paragraphs) > 1:
             continue
         
-        if len(para.split()) > CHUNK_SIZE:  # Use config value
+        # If paragraph is too long, split it by sentences
+        if para_words > CHUNK_SIZE // 2:  # Use config value
             sentences = re.split(r'(?<=[.!?])\s+', para)
-            current_chunk = []
-            current_len = 0
-            
             for sent in sentences:
-                sent_len = len(sent.split())
-                if current_len + sent_len > CHUNK_SIZE and current_chunk:
+                sent_words = len(sent.split())
+                
+                # If adding this sentence would exceed limit, save current chunk
+                if current_length + sent_words > CHUNK_SIZE and current_chunk:
                     chunk_text = ' '.join(current_chunk)
-                    chunks.append({'text': chunk_text})
-                    current_chunk = []
-                    current_len = 0
-                current_chunk.append(sent)
-                current_len += sent_len
-            
-            if current_chunk:
-                chunk_text = ' '.join(current_chunk)
-                chunks.append({'text': chunk_text})
+                    if len(chunk_text) >= MIN_CHUNK_CHARACTERS:
+                        chunks.append({'text': chunk_text})
+                    current_chunk = [sent]
+                    current_length = sent_words
+                else:
+                    current_chunk.append(sent)
+                    current_length += sent_words
         else:
-            chunks.append({'text': para})
+            # If adding this paragraph would exceed limit, save current chunk
+            if current_length + para_words > CHUNK_SIZE and current_chunk:
+                chunk_text = ' '.join(current_chunk)
+                if len(chunk_text) >= MIN_CHUNK_CHARACTERS:
+                    chunks.append({'text': chunk_text})
+                current_chunk = [para]
+                current_length = para_words
+            else:
+                current_chunk.append(para)
+                current_length += para_words
+    
+    # Add remaining content as final chunk
+    if current_chunk:
+        chunk_text = ' '.join(current_chunk)
+        if len(chunk_text) >= MIN_CHUNK_CHARACTERS:
+            chunks.append({'text': chunk_text})
     
     # If no chunks created, create at least one from the text
     if not chunks and len(text.strip()) > 0:
         chunks.append({'text': text.strip()})
+    
+    # Limit chunk size to maximum allowed
+    for chunk in chunks:
+        if len(chunk['text']) > MAX_CHUNK_CHARACTERS:
+            chunk['text'] = chunk['text'][:MAX_CHUNK_CHARACTERS-3] + "..."
     
     return chunks
 

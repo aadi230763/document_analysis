@@ -15,25 +15,25 @@ GEMINI_API_URL = os.getenv("GEMINI_API_URL", "https://generativelanguage.googlea
 CHROMA_DIR = BASE_DIR / "chroma_db"
 COLLECTION_NAME = "insurance_policies_enhanced"
 
-# Processing Config - Enhanced for better accuracy
-CHUNK_SIZE = 1200  # Increased from 512 for better context
-CHUNK_OVERLAP = 128
-MIN_CHUNK_LENGTH = 50
+# Processing Config - Optimized for accuracy and performance
+CHUNK_SIZE = 800  # Optimized for better context preservation
+CHUNK_OVERLAP = 100  # Reduced overlap for efficiency
+MIN_CHUNK_LENGTH = 30  # Lowered for better coverage of short but important clauses
 
-# Retrieval Config - Optimized for accuracy and latency
-BASE_RESULTS = 15  # Increased for better coverage
-EXPANDED_RESULTS = 3
-SIMILARITY_THRESHOLD = 0.3
+# Retrieval Config - Enhanced for accuracy
+BASE_RESULTS = 20  # Increased for better coverage
+EXPANDED_RESULTS = 5  # Increased for better expansion
+SIMILARITY_THRESHOLD = 0.25  # Lowered for more inclusive matching
 
-# Performance Config
-CACHE_SIZE = 200  # Increased cache size
-CACHE_TTL = 3600  # Cache TTL in seconds
-MAX_TOKENS_PER_REQUEST = 1000  # Token limit for LLM
-RESPONSE_TIMEOUT = 30  # Timeout in seconds
+# Performance Config - Optimized for hackathon
+CACHE_SIZE = 300  # Increased cache size for better performance
+CACHE_TTL = 7200  # Increased cache TTL to 2 hours
+MAX_TOKENS_PER_REQUEST = 1200  # Increased token limit for better answers
+RESPONSE_TIMEOUT = 45  # Increased timeout for complex documents
 
-# Accuracy Config
-MIN_CONFIDENCE_THRESHOLD = 0.3
-MEDICAL_RELEVANCE_THRESHOLD = 0.1
+# Accuracy Config - Enhanced for better results
+MIN_CONFIDENCE_THRESHOLD = 0.2  # Lowered for more inclusive matching
+MEDICAL_RELEVANCE_THRESHOLD = 0.05  # Lowered for better medical term matching
 ENHANCED_SCORING = True
 
 # Deployment Config
@@ -44,15 +44,22 @@ ENABLE_AUDIT_LOGGING = os.getenv("ENABLE_AUDIT_LOGGING", "True").lower() == "tru
 # API Config
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
-MAX_REQUESTS_PER_MINUTE = 100
+MAX_REQUESTS_PER_MINUTE = 150  # Increased for hackathon usage
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "False").lower() == "true"
 
 # Medical Terms Config
 ENABLE_DYNAMIC_SYNONYMS = True
-SYNONYM_CACHE_SIZE = 500
+SYNONYM_CACHE_SIZE = 800  # Increased for better synonym coverage
 MEDICAL_ENTITY_EXTRACTION = True
 
 # Rule Engine Config
 ENABLE_CONFIDENCE_SCORING = True
 ENABLE_MEDICAL_RELEVANCE = True
-PATTERN_MATCHING_STRICT = False  # Set to True for stricter matching
+PATTERN_MATCHING_STRICT = False  # Keep flexible for better matching
+
+# Document Processing Config - New optimizations
+MAX_CHUNKS_PER_DOCUMENT = 30  # Increased for better coverage
+MIN_CHUNK_CHARACTERS = 20  # Minimum characters for valid chunks
+MAX_CHUNK_CHARACTERS = 1000  # Maximum characters per chunk
+ENABLE_SECTION_AWARE_CHUNKING = True  # Enable section-based chunking
+ENABLE_KEYWORD_ENHANCED_RETRIEVAL = True  # Enable keyword-based enhancement
