@@ -904,6 +904,13 @@ def hackrx_run():
     tracker = PerformanceTracker()
     tracker.start()
     try:
+        # Check content type first
+        if not request.is_json:
+            content_type = request.headers.get('Content-Type', 'Not specified')
+            return jsonify({
+                "error": f"Invalid Content-Type. Expected 'application/json', got '{content_type}'. Please ensure your request includes the header: Content-Type: application/json"
+            }), 415
+        
         data = request.get_json()
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
