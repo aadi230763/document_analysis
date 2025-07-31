@@ -58,6 +58,12 @@ def parse_document_from_url(url):
         content = resp.content
         content_type = resp.headers.get('Content-Type', '').lower()
         ext = os.path.splitext(url.split('?')[0])[1].lower()
+        logger.info(f"Downloaded {len(content)} bytes, Content-Type: {content_type}, Extension: {ext}")
+        
+        # Check if we have any content
+        if not content or len(content) == 0:
+            raise Exception("Downloaded document is empty")
+            
     except Exception as e:
         logger.error(f"Failed to download document: {url} | {e}")
         raise Exception(f"Failed to download document: {e}")
@@ -154,6 +160,7 @@ def parse_document_from_url(url):
 
     # --- Improved PDF logic ---
     if ext == '.pdf' or 'pdf' in content_type:
+        logger.info(f"Attempting PDF parsing for {len(content)} bytes")
         try:
             pdf_stream = BytesIO(content)
             reader = PdfReader(pdf_stream)
@@ -162,22 +169,27 @@ def parse_document_from_url(url):
                 text = page.extract_text() or ''
                 all_text.append(text)
             full_text = '\n'.join(all_text)
+            logger.info(f"PDF extracted {len(full_text)} characters of text")
             
             # If no text, fallback to pdfplumber
             if not full_text.strip():
+                logger.info("No text from PyPDF2, trying pdfplumber")
                 pdf_stream.seek(0)
                 with pdfplumber.open(pdf_stream) as pdf:
                     all_text = [page.extract_text() or '' for page in pdf.pages]
                 full_text = '\n'.join(all_text)
+                logger.info(f"pdfplumber extracted {len(full_text)} characters of text")
             
             # If still no text, fallback to OCR
             if not full_text.strip():
+                logger.info("No text from pdfplumber, trying OCR")
                 try:
                     from pdf2image import convert_from_bytes
                     import pytesseract
                     images = convert_from_bytes(content)
                     all_text = [pytesseract.image_to_string(img) for img in images]
                     full_text = '\n'.join(all_text)
+                    logger.info(f"OCR extracted {len(full_text)} characters of text")
                 except Exception as ocr_e:
                     logger.error(f"PDF OCR failed: {ocr_e}")
             
@@ -196,13 +208,17 @@ def parse_document_from_url(url):
                     section_text = full_text[start:end].strip()
                     
                     if section_text:
-                        section_chunks = smart_chunk_text(section_text, section=header, chunk_type='pdf_section')
+                        section_chunks = smart_chunk_text(section_text, section_name=header, chunk_type='pdf_section')
                         chunks.extend(section_chunks)
             else:
                 # Fallback to paragraph-based chunking
-                chunks = smart_chunk_text(full_text, section='PDF Document', chunk_type='pdf_section')
+                chunks = smart_chunk_text(full_text, section_name='PDF Document', chunk_type='pdf_section')
             
-            return [c for c in chunks if c['text']]
+            result = [c for c in chunks if c['text']]
+            logger.info(f"PDF parsing successful, created {len(result)} chunks")
+            if not result:
+                logger.warning("PDF parsing completed but no valid chunks were created")
+            return result
             
         except Exception as e:
             logger.error(f"PDF parsing failed: {e}\n{traceback.format_exc()}")
@@ -210,12 +226,14 @@ def parse_document_from_url(url):
     
     # --- Improved DOCX logic ---
     if ext == '.docx' or 'word' in content_type or 'docx' in content_type:
+        logger.info(f"Attempting DOCX parsing for {len(content)} bytes")
         try:
             docx_stream = BytesIO(content)
             doc = docx.Document(docx_stream)
             
             # Extract all text with structure
             full_text = '\n'.join([para.text for para in doc.paragraphs if para.text.strip()])
+            logger.info(f"DOCX extracted {len(full_text)} characters of text")
             
             chunks = []
             headers = extract_section_headers(full_text)
@@ -231,7 +249,7 @@ def parse_document_from_url(url):
                     section_text = full_text[start:end].strip()
                     
                     if section_text:
-                        section_chunks = smart_chunk_text(section_text, section=header, chunk_type='docx_section')
+                        section_chunks = smart_chunk_text(section_text, section_name=header, chunk_type='docx_section')
                         chunks.extend(section_chunks)
             else:
                 # Fallback to paragraph-based chunking
@@ -245,13 +263,18 @@ def parse_document_from_url(url):
                 if table_text.strip():
                     add_chunk(chunks, table_text, section=f"Table {t_idx+1}", table=table_text, chunk_type='docx_table')
             
-            return [c for c in chunks if c['text']]
+            result = [c for c in chunks if c['text']]
+            logger.info(f"DOCX parsing successful, created {len(result)} chunks")
+            if not result:
+                logger.warning("DOCX parsing completed but no valid chunks were created")
+            return result
             
         except Exception as e:
             logger.error(f"DOCX parsing failed: {e}\n{traceback.format_exc()}")
     
     # --- EML logic ---
     if ext == '.eml' or 'message/rfc822' in content_type or 'eml' in content_type:
+        logger.info(f"Attempting EML parsing for {len(content)} bytes")
         try:
             msg = BytesParser(policy=policy.default).parsebytes(content)
             text = ''
@@ -262,20 +285,52 @@ def parse_document_from_url(url):
             else:
                 text = msg.get_content()
             
-            chunks = smart_chunk_text(text, section='Email Body', chunk_type='eml')
-            return [c for c in chunks if c['text']]
+            logger.info(f"EML extracted {len(text)} characters of text")
+            chunks = smart_chunk_text(text, section_name='Email Body', chunk_type='eml')
+            result = [c for c in chunks if c['text']]
+            logger.info(f"EML parsing successful, created {len(result)} chunks")
+            if not result:
+                logger.warning("EML parsing completed but no valid chunks were created")
+            return result
             
         except Exception as e:
             logger.error(f"EML parsing failed: {e}\n{traceback.format_exc()}")
     
     # --- Plain text fallback ---
+    logger.info(f"Attempting plain text parsing for {len(content)} bytes")
     try:
         text = content.decode(errors='ignore')
-        chunks = smart_chunk_text(text, section='Plain Text', chunk_type='plain')
-        return [c for c in chunks if c['text']]
+        logger.info(f"Plain text extracted {len(text)} characters")
+        chunks = smart_chunk_text(text, section_name='Plain Text', chunk_type='plain')
+        result = [c for c in chunks if c['text']]
+        logger.info(f"Plain text parsing successful, created {len(result)} chunks")
+        if not result:
+            logger.warning("Plain text parsing completed but no valid chunks were created")
+        return result
     except Exception as e:
         logger.error(f"Plain text parsing failed: {e}\n{traceback.format_exc()}")
-        raise Exception("Document could not be parsed as PDF, DOCX, EML, or plain text.")
+        
+        # Final fallback: try to parse as PDF regardless of content type
+        logger.info("Attempting final PDF fallback parsing")
+        try:
+            pdf_stream = BytesIO(content)
+            reader = PdfReader(pdf_stream)
+            all_text = []
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text() or ''
+                all_text.append(text)
+            full_text = '\n'.join(all_text)
+            
+            if full_text.strip():
+                chunks = smart_chunk_text(full_text, section_name='PDF Document (Fallback)', chunk_type='pdf_fallback')
+                result = [c for c in chunks if c['text']]
+                if result:
+                    logger.info(f"PDF fallback parsing successful, created {len(result)} chunks")
+                    return result
+        except Exception as pdf_fallback_e:
+            logger.error(f"PDF fallback parsing also failed: {pdf_fallback_e}")
+        
+        raise Exception(f"Document could not be parsed as PDF, DOCX, EML, or plain text. Content-Type: {content_type}, Extension: {ext}, Content length: {len(content)} bytes. Error: {str(e)}")
 
 app = Flask(__name__)
 CORS(app)
