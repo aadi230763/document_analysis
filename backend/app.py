@@ -211,11 +211,18 @@ def parse_document_from_url(url):
         return sorted(set(headers), key=lambda h: text.find(h))
 
     def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=512):
-        """Enhanced chunking with proper 30% overlap"""
+        """Enhanced chunking with proper 30% overlap and insurance term preservation"""
         from config import CHUNK_OVERLAP_RATIO
         sentences = safe_sent_tokenize(text)
         chunks = []
         overlap_size = int(max_chunk_size * CHUNK_OVERLAP_RATIO)  # 30% overlap
+        
+        # Insurance terms that should be preserved together
+        insurance_terms = [
+            'grace period', 'waiting period', 'pre-existing disease', 'no claim discount',
+            'health check-up', 'room rent', 'intensive care unit', 'organ donor',
+            'maternity expenses', 'cataract surgery', 'ayush treatment'
+        ]
         
         i = 0
         while i < len(sentences):
@@ -225,18 +232,37 @@ def parse_document_from_url(url):
             
             # Build chunk up to max size
             while i < len(sentences) and chunk_len < max_chunk_size:
-                chunk.append(sentences[i])
-                chunk_len += len(sentences[i].split())
+                sentence = sentences[i]
+                chunk.append(sentence)
+                chunk_len += len(sentence.split())
                 i += 1
             
+            # Check if we're breaking an insurance term - if so, include the next sentence
+            if i < len(sentences):
+                current_chunk_text = " ".join(chunk).lower()
+                next_sentence = sentences[i].lower()
+                
+                # Check if we're breaking any insurance terms
+                for term in insurance_terms:
+                    if term in current_chunk_text and term in next_sentence:
+                        # Include the next sentence to preserve the term context
+                        chunk.append(sentences[i])
+                        chunk_len += len(sentences[i].split())
+                        i += 1
+                        break
+            
             if chunk:
-                chunks.append({
-                    "text": " ".join(chunk),
-                    "section": section_name,
-                    "chunk_type": chunk_type,
-                    "start_sentence": start_i,
-                    "end_sentence": i-1
-                })
+                chunk_text = " ".join(chunk)
+                # Only add chunk if it has meaningful content
+                if len(chunk_text.strip()) >= MIN_CHUNK_LENGTH:
+                    chunks.append({
+                        "text": chunk_text,
+                        "section": section_name,
+                        "chunk_type": chunk_type,
+                        "start_sentence": start_i,
+                        "end_sentence": i-1,
+                        "word_count": chunk_len
+                    })
             
             # Move back by overlap amount for next chunk
             if i < len(sentences):
@@ -1662,8 +1688,13 @@ def hybrid_retrieve(query, chunks, embeddings, top_k=5):
         import re
         # Split on whitespace and punctuation, but keep insurance terms together
         tokens = re.findall(r'\b\w+(?:[-_]\w+)*\b', text.lower())
-        # Filter out very short tokens
-        return [token for token in tokens if len(token) > 2]
+        # Filter out very short tokens but keep important insurance terms
+        important_terms = ['ncd', 'ped', 'ayush', 'icu', 'ot', 'ppn', 'grace', 'premium', 'coverage', 'exclusion', 'waiting', 'period']
+        filtered_tokens = []
+        for token in tokens:
+            if len(token) > 2 or token in important_terms:
+                filtered_tokens.append(token)
+        return filtered_tokens
     
     tfidf = TfidfVectorizer(
         tokenizer=custom_tokenizer,
@@ -1696,10 +1727,10 @@ def hybrid_retrieve(query, chunks, embeddings, top_k=5):
         logger.warning("rank_bm25 not available, using TF-IDF only")
         bm25_scores = sparse_scores
     
-    # Combine scores with configurable weights
+    # Combine scores with configurable weights - more aggressive sparse retrieval
     combined_scores = (
         DENSE_WEIGHT * dense_scores + 
-        SPARSE_WEIGHT * 0.5 * (sparse_scores + bm25_scores)
+        SPARSE_WEIGHT * (sparse_scores + bm25_scores)  # Removed 0.5 factor for more aggressive sparse matching
     )
     
     # Get top results
@@ -1719,18 +1750,183 @@ def hybrid_retrieve(query, chunks, embeddings, top_k=5):
     return results
 
 def build_llm_prompt(context, question):
-    """Enhanced LLM prompt that ensures evidence-based responses"""
+    """Enhanced LLM prompt that ensures evidence-based responses for insurance policies across different documents"""
+    question_lower = question.lower()
+    
+    # Create dynamic instructions based on question type using broader insurance terminology
+    specific_instructions = ""
+    
+    # Time-based concepts
+    if any(term in question_lower for term in ['grace period', 'grace', 'payment period', 'renewal period']):
+        specific_instructions = """
+        GRACE PERIOD SEARCH INSTRUCTIONS:
+        - Look for ANY mention of "grace period", "grace", "renewal", "payment", "premium"
+        - Search for terms like "payment period", "renewal period", "continuous coverage"
+        - Check for policy renewal, payment terms, and continuity benefits
+        - If you find ANY grace period information, state it clearly
+        """
+    elif any(term in question_lower for term in ['waiting period', 'pre-existing', 'existing condition', 'time period']):
+        specific_instructions = """
+        WAITING PERIOD SEARCH INSTRUCTIONS:
+        - Look for "waiting period", "exclusion period", "time period", "months", "years"
+        - Search for "pre-existing", "existing condition", "prior condition", "time limit"
+        - Check for specific time periods mentioned in exclusions or conditions
+        - Look for "covered after" followed by time periods
+        """
+    
+    # Coverage types
+    elif any(term in question_lower for term in ['maternity', 'pregnancy', 'childbirth', 'delivery']):
+        specific_instructions = """
+        MATERNITY SEARCH INSTRUCTIONS:
+        - Look for "maternity", "pregnancy", "childbirth", "delivery", "female insured"
+        - Search for age limits, waiting periods, coverage conditions
+        - Check both inclusion and exclusion sections for maternity information
+        - Look for continuous coverage requirements and lawful termination
+        """
+    elif any(term in question_lower for term in ['surgery', 'surgical', 'operation', 'procedure', 'cataract']):
+        specific_instructions = """
+        SURGERY SEARCH INSTRUCTIONS:
+        - Look for "surgery", "surgical", "operation", "procedure", "cataract", "eye surgery"
+        - Search for waiting periods, exclusion periods, time requirements
+        - Check for specific conditions and coverage limits
+        """
+    elif any(term in question_lower for term in ['organ donor', 'donor', 'transplantation', 'transplant']):
+        specific_instructions = """
+        ORGAN DONOR SEARCH INSTRUCTIONS:
+        - Look for "organ donor", "donor", "transplantation", "transplant", "harvesting"
+        - Search for hospitalization, pre/post hospitalization, complications
+        - Check for coverage limits and exclusions
+        """
+    
+    # Financial concepts
+    elif any(term in question_lower for term in ['ncd', 'no claim discount', 'claim discount', 'discount']):
+        specific_instructions = """
+        NCD SEARCH INSTRUCTIONS:
+        - Look for "NCD", "no claim discount", "no claim", "claim discount", "discount"
+        - Search for renewal terms, flat discount, policy term, bonus
+        - Check for conditions and limitations on discounts
+        """
+    elif any(term in question_lower for term in ['room rent', 'accommodation', 'bed charges', 'icu']):
+        specific_instructions = """
+        ROOM RENT/ICU SEARCH INSTRUCTIONS:
+        - Look for "room rent", "accommodation", "bed charges", "ICU", "intensive care"
+        - Search for "sub-limits", "capped", "per day", "daily charges"
+        - Check for preferred provider network conditions
+        """
+    
+    # Medical concepts
+    elif any(term in question_lower for term in ['health check', 'preventive', 'wellness', 'screening']):
+        specific_instructions = """
+        HEALTH CHECK SEARCH INSTRUCTIONS:
+        - Look for "health check", "preventive", "wellness", "screening", "medical check"
+        - Search for continuous policy requirements and reimbursable conditions
+        - Check for waiting periods and limitations
+        """
+    elif any(term in question_lower for term in ['hospital', 'medical institution', 'healthcare facility']):
+        specific_instructions = """
+        HOSPITAL SEARCH INSTRUCTIONS:
+        - Look for "hospital", "medical institution", "healthcare facility", "clinic"
+        - Search for registration requirements, staff requirements, daily records
+        - Check for inpatient/outpatient distinctions
+        """
+    elif any(term in question_lower for term in ['ayush', 'ayurveda', 'traditional medicine', 'alternative medicine']):
+        specific_instructions = """
+        AYUSH SEARCH INSTRUCTIONS:
+        - Look for "AYUSH", "Ayurveda", "Yoga", "Naturopathy", "Unani", "Siddha", "Homeopathy"
+        - Search for "traditional medicine", "alternative medicine", "inpatient treatment"
+        - Check for recognized hospital requirements and coverage limits
+        """
+    
+    # General coverage concepts
+    elif any(term in question_lower for term in ['coverage', 'cover', 'covered', 'benefit', 'eligible']):
+        specific_instructions = """
+        COVERAGE SEARCH INSTRUCTIONS:
+        - Look for "coverage", "cover", "covered", "benefit", "eligible", "included"
+        - Search for specific conditions, limitations, and requirements
+        - Check both inclusion and exclusion sections
+        - Look for positive coverage statements and exceptions
+        """
+    
     return (
-        "You are an expert document analysis assistant. Answer the following question using ONLY the provided context. "
+        "You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.\n\n"
         "CRITICAL INSTRUCTIONS:\n"
-        "1. Base your answer EXCLUSIVELY on the information provided in the context\n"
-        "2. If the answer is not present in the context, reply: 'Not found in the document.'\n"
-        "3. Do not make assumptions or use external knowledge\n"
-        "4. If the context contains conflicting information, acknowledge this\n"
-        "5. Be specific and cite relevant parts of the context when possible\n"
-        "6. Keep answers concise but comprehensive\n\n"
-        f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+        "- Read ALL policy clauses carefully and thoroughly.\n"
+        "- Look for specific details, amounts, time periods, conditions, and requirements.\n"
+        "- Start with \"Yes,\" if coverage exists OR \"No,\" if explicitly excluded.\n"
+        "- Include specific amounts, time periods, conditions, and requirements when mentioned.\n"
+        "- Be comprehensive and detailed - provide full context and conditions.\n"
+        "- Include specific policy sections, exclusions, and limitations when mentioned.\n"
+        "- If the answer involves conditions or limitations, mention them clearly.\n"
+        "- Provide complete information about eligibility, waiting periods, and coverage limits.\n"
+        "- IMPORTANT: Look for positive coverage statements (covered, eligible, allowed, provided, includes, covers, reimbursable, payable, included, offered, granted).\n"
+        "- IMPORTANT: Be careful with exclusion language - look for exceptions and conditions within exclusions.\n"
+        "- IMPORTANT: Check for coverage that exists despite being in exclusion sections (e.g., 'covered after X months').\n"
+        "- IMPORTANT: Look for time-based conditions, waiting periods, and renewal terms.\n"
+        "- IMPORTANT: Check for financial terms like discounts, sub-limits, and payment conditions.\n"
+        "- Only say \"Not found in the document.\" if absolutely no relevant information exists in the provided context.\n"
+        "- Do not make assumptions or use external knowledge.\n"
+        "- If the context contains conflicting information, acknowledge this.\n"
+        "- Be specific and cite relevant parts of the context when possible.\n"
+        "- Keep answers concise but comprehensive.\n"
+        f"{specific_instructions}\n"
+        f"Policy Clauses:\n{context}\n\nQuestion: {question}\n\nAnswer:"
     )
+
+def prepare_llm_context(retrieval_results, question, max_context_tokens):
+    """
+    Prepares the context for the LLM by selecting and truncating relevant chunks
+    to fit within the max_context_tokens limit.
+    """
+    context_parts = []
+    current_tokens = 0
+    
+    # Sort by score to prioritize most relevant
+    sorted_results = sorted(retrieval_results, key=lambda x: x['score'], reverse=True)
+    
+    # Add a buffer for the prompt itself (instructions + question)
+    prompt_buffer_tokens = count_tokens(build_llm_prompt("", question)) # Estimate prompt size without context
+    remaining_context_tokens = max_context_tokens - prompt_buffer_tokens - 50 # 50 token buffer for safety
+    
+    if remaining_context_tokens <= 0:
+        logger.warning(f"Not enough token space for context. Max context tokens: {max_context_tokens}, Prompt buffer: {prompt_buffer_tokens}")
+        return ""
+
+    for result in sorted_results:
+        chunk = result['chunk']
+        score = result['score']
+        
+        # Add section info if available
+        section_info = f"Section: {chunk.get('section','')}" if chunk.get('section') else "Policy Document"
+        
+        # Format chunk text for context
+        chunk_text_raw = chunk['text']
+        
+        # Estimate tokens for this chunk, including formatting overhead
+        formatted_chunk_prefix = f"[{section_info}, Score: {score:.3f}]\n"
+        estimated_chunk_tokens_with_format = count_tokens(formatted_chunk_prefix + chunk_text_raw)
+        
+        if current_tokens + estimated_chunk_tokens_with_format > remaining_context_tokens:
+            # If adding the full chunk exceeds limit, try to truncate it
+            space_left = remaining_context_tokens - current_tokens
+            if space_left <= count_tokens(formatted_chunk_prefix) + 10: # Need at least 10 tokens for actual text
+                break # No meaningful space left
+            
+            # Calculate how many characters can fit
+            chars_for_text = (space_left - count_tokens(formatted_chunk_prefix)) * 4
+            truncated_text = chunk_text_raw[:chars_for_text]
+            if len(truncated_text) < len(chunk_text_raw):
+                truncated_text += "..."
+            
+            context_part = f"{formatted_chunk_prefix}{truncated_text}"
+            context_parts.append(context_part)
+            current_tokens += count_tokens(context_part)
+            break # Context is full
+        else:
+            context_part = f"{formatted_chunk_prefix}{chunk_text_raw}"
+            context_parts.append(context_part)
+            current_tokens += estimated_chunk_tokens_with_format
+    
+    return "\n\n---\n\n".join(context_parts)
 
 @app.route('/optimized_query', methods=['POST'])
 def handle_optimized_query():
@@ -1791,23 +1987,28 @@ def handle_optimized_query():
         for i, question in enumerate(questions):
             logger.info(f"Processing question {i+1}/{len(questions)}: {question}")
             
-            # Use hybrid retrieval for better accuracy
-            retrieval_results = hybrid_retrieve(question, chunks, embeddings, top_k=10)
+            # Expand query with insurance-specific terms for better retrieval
+            expanded_question = expand_insurance_query(question)
+            logger.info(f"Expanded query: {expanded_question}")
+            
+            # Use hybrid retrieval for better accuracy - increased top_k for more context
+            retrieval_results = hybrid_retrieve(expanded_question, chunks, embeddings, top_k=25)
             
             if not retrieval_results:
                 answers.append("Not found in the document.")
                 continue
             
-            # Prepare context from top results
-            context_parts = []
-            for result in retrieval_results[:5]:  # Use top 5 results
-                chunk = result['chunk']
-                score = result['score']
-                context_parts.append(f"[Score: {score:.3f}] {chunk['text']}")
+            # Enhance retrieval scores with insurance term weighting
+            enhanced_results = enhance_retrieval_scores(retrieval_results, question)
             
-            context = "\n\n".join(context_parts)
+            # Use the new context preparation function with token limits - increased for better coverage
+            context = prepare_llm_context(enhanced_results, question, MAX_TOKENS_PER_REQUEST + 400)
             
-            # Build enhanced prompt
+            if not context.strip():
+                answers.append("Not found in the document.")
+                continue
+            
+            # Build enhanced prompt using original question (not expanded)
             prompt = build_llm_prompt(context, question)
             
             # Generate answer with fallback
@@ -1844,9 +2045,22 @@ def handle_optimized_query():
             # Clean up answer
             if answer:
                 answer = answer.strip()
+                # Check if answer indicates no information found
+                if any(phrase in answer.lower() for phrase in ['not found', 'no information', 'not mentioned', 'not specified', 'not available']):
+                    answer = "Not found in the document."
                 # Ensure it's not too long
-                if len(answer) > 500:
-                    answer = answer[:497] + "..."
+                elif len(answer) > MAX_ANSWER_CHARACTERS:
+                    # Truncate to sentence boundary if possible
+                    sentences = safe_sent_tokenize(answer)
+                    truncated = ""
+                    for sentence in sentences:
+                        if len(truncated + sentence) <= MAX_ANSWER_CHARACTERS - 3:
+                            truncated += sentence + " "
+                        else:
+                            break
+                    answer = truncated.strip() + "..."
+            else:
+                answer = "Not found in the document."
             
             answers.append(answer)
             logger.info(f"Answer {i+1} ({model_used}): {answer}")
@@ -1882,6 +2096,192 @@ def safe_sent_tokenize(text):
     except Exception as e:
         logger.warning(f"NLTK tokenization failed, using fallback: {e}")
         return fallback_sent_tokenize(text)
+
+def expand_insurance_query(query):
+    """
+    Expands insurance-related queries with synonyms and related terms
+    to improve retrieval accuracy across different insurance documents.
+    """
+    query_lower = query.lower()
+    
+    # Define general insurance term mappings that work across different policies
+    insurance_terms = {
+        # Time-based concepts
+        'grace period': ['grace period', 'grace', 'payment grace', 'renewal grace', 'premium grace', 'payment period', 'renewal period', 'continuous coverage', 'policy renewal', 'payment terms', 'renewal terms'],
+        'waiting period': ['waiting period', 'waiting', 'exclusion period', 'time period', 'months', 'years', 'covered after', 'time limit', 'duration', 'period'],
+        'pre-existing': ['pre-existing', 'pre existing', 'existing condition', 'prior condition', 'existing disease', 'pre-existing disease', 'ped'],
+        
+        # Coverage types
+        'maternity': ['maternity', 'pregnancy', 'childbirth', 'delivery', 'prenatal', 'postnatal', 'female insured', 'lawful termination', 'covered female', 'maternal'],
+        'surgery': ['surgery', 'surgical', 'operation', 'procedure', 'cataract', 'eye surgery', 'ophthalmic', 'vision surgery', 'organ transplant', 'transplantation'],
+        'organ donor': ['organ donor', 'donor', 'organ transplantation', 'transplant', 'harvesting', 'donation'],
+        'health check': ['health check', 'health checkup', 'preventive', 'preventive health', 'medical check', 'wellness', 'screening'],
+        'hospital': ['hospital', 'medical institution', 'healthcare facility', 'clinic', 'inpatient', 'outpatient', 'medical center'],
+        'ayush': ['ayush', 'ayurveda', 'yoga', 'naturopathy', 'unani', 'siddha', 'homeopathy', 'traditional medicine', 'alternative medicine'],
+        
+        # Financial concepts
+        'ncd': ['ncd', 'no claim discount', 'no claim', 'claim discount', 'discount', 'renewal discount', 'bonus', 'no claim bonus'],
+        'room rent': ['room rent', 'room charges', 'accommodation', 'bed charges', 'sub-limits', 'capped', 'per day', 'daily charges'],
+        'icu': ['icu', 'intensive care', 'critical care', 'emergency care', 'ccu', 'critical care unit'],
+        'premium': ['premium', 'payment', 'cost', 'fee', 'amount', 'rate', 'pricing'],
+        
+        # General insurance concepts
+        'coverage': ['coverage', 'cover', 'covered', 'benefit', 'benefits', 'eligible', 'eligibility', 'included', 'includes'],
+        'exclusion': ['exclusion', 'excluded', 'not covered', 'not included', 'limitation', 'restriction', 'condition'],
+        'claim': ['claim', 'claims', 'claimant', 'claiming', 'claim amount', 'claim process'],
+        'policy': ['policy', 'insurance', 'plan', 'scheme', 'contract', 'agreement'],
+        'sum insured': ['sum insured', 'coverage amount', 'limit', 'maximum', 'cap', 'ceiling'],
+        'deductible': ['deductible', 'excess', 'co-payment', 'co-pay', 'out of pocket'],
+        
+        # Medical terms
+        'hospitalization': ['hospitalization', 'hospitalized', 'inpatient', 'admission', 'discharge'],
+        'treatment': ['treatment', 'therapy', 'medication', 'drugs', 'medicine', 'prescription'],
+        'diagnosis': ['diagnosis', 'diagnostic', 'test', 'testing', 'examination', 'assessment'],
+        'emergency': ['emergency', 'urgent', 'critical', 'acute', 'immediate'],
+        
+        # Administrative terms
+        'renewal': ['renewal', 'renew', 'renewed', 'extension', 'continue', 'continuation'],
+        'portability': ['portability', 'port', 'transfer', 'switch', 'change insurer'],
+        'documentation': ['documentation', 'documents', 'proof', 'evidence', 'certificate', 'report'],
+        'notification': ['notification', 'notice', 'inform', 'report', 'declare', 'intimate']
+    }
+    
+    # Find matching terms and expand
+    expanded_terms = []
+    for term, synonyms in insurance_terms.items():
+        if term in query_lower:
+            expanded_terms.extend(synonyms)
+    
+    # If no specific terms found, add general insurance terms
+    if not expanded_terms:
+        expanded_terms = ['coverage', 'policy', 'insurance', 'benefit', 'exclusion', 'condition', 'section', 'clause', 'term', 'provision']
+    
+    # Combine original query with expanded terms
+    expanded_query = query + " " + " ".join(expanded_terms[:5])
+    
+    return expanded_query
+
+def enhance_retrieval_scores(retrieval_results, question):
+    """
+    Enhances retrieval scores by giving higher weights to chunks containing
+    relevant insurance terms and better semantic matching across different insurance documents.
+    """
+    question_lower = question.lower()
+    
+    # Define general insurance term importance weights that work across different policies
+    term_weights = {
+        # Time-based concepts (high priority)
+        'grace period': 3.0, 'grace': 2.5, 'payment period': 2.0, 'renewal period': 2.0,
+        'waiting period': 3.0, 'exclusion period': 2.5, 'time period': 2.0, 'covered after': 2.0,
+        'pre-existing': 3.0, 'existing condition': 2.5, 'prior condition': 2.0,
+        
+        # Coverage types (high priority)
+        'maternity': 3.0, 'pregnancy': 2.5, 'childbirth': 2.0, 'delivery': 2.0,
+        'surgery': 3.0, 'surgical': 2.5, 'operation': 2.0, 'procedure': 2.0,
+        'cataract': 3.0, 'eye surgery': 2.5, 'ophthalmic': 2.0,
+        'organ donor': 3.0, 'donor': 2.5, 'transplantation': 2.0, 'transplant': 2.0,
+        'health check': 3.0, 'preventive': 2.5, 'wellness': 2.0, 'screening': 2.0,
+        'hospital': 2.5, 'medical institution': 2.0, 'healthcare facility': 2.0,
+        'ayush': 3.0, 'ayurveda': 2.5, 'traditional medicine': 2.0, 'alternative medicine': 2.0,
+        
+        # Financial concepts (medium-high priority)
+        'ncd': 3.0, 'no claim discount': 2.5, 'claim discount': 2.0, 'discount': 1.5,
+        'room rent': 2.5, 'accommodation': 2.0, 'bed charges': 2.0, 'sub-limits': 2.0,
+        'icu': 2.5, 'intensive care': 2.0, 'critical care': 2.0, 'emergency care': 2.0,
+        'premium': 2.0, 'payment': 1.5, 'cost': 1.5, 'fee': 1.5,
+        
+        # General insurance concepts (medium priority)
+        'coverage': 2.0, 'cover': 1.8, 'covered': 1.8, 'benefit': 1.8, 'benefits': 1.8,
+        'eligible': 2.0, 'eligibility': 1.8, 'included': 1.8, 'includes': 1.8,
+        'exclusion': 1.8, 'excluded': 1.8, 'not covered': 1.8, 'limitation': 1.5,
+        'claim': 1.8, 'claims': 1.8, 'claimant': 1.5, 'claim amount': 2.0,
+        'policy': 1.5, 'insurance': 1.5, 'plan': 1.5, 'scheme': 1.5,
+        'sum insured': 2.0, 'coverage amount': 1.8, 'limit': 1.5, 'maximum': 1.5,
+        'deductible': 2.0, 'excess': 1.8, 'co-payment': 1.8, 'co-pay': 1.8,
+        
+        # Medical terms (medium priority)
+        'hospitalization': 2.0, 'hospitalized': 1.8, 'inpatient': 1.8, 'admission': 1.5,
+        'treatment': 1.8, 'therapy': 1.5, 'medication': 1.5, 'medicine': 1.5,
+        'diagnosis': 1.8, 'diagnostic': 1.5, 'test': 1.5, 'testing': 1.5,
+        'emergency': 2.0, 'urgent': 1.8, 'critical': 1.8, 'acute': 1.5,
+        
+        # Administrative terms (lower priority)
+        'renewal': 1.5, 'renew': 1.5, 'extension': 1.5, 'continue': 1.5,
+        'portability': 1.8, 'port': 1.5, 'transfer': 1.5, 'switch': 1.5,
+        'documentation': 1.5, 'documents': 1.5, 'proof': 1.5, 'evidence': 1.5,
+        'notification': 1.5, 'notice': 1.5, 'inform': 1.5, 'report': 1.5,
+        
+        # Common insurance terms (base priority)
+        'section': 1.2, 'clause': 1.2, 'term': 1.2, 'provision': 1.2, 'condition': 1.2
+    }
+    
+    # Define positive coverage indicators (bonus for positive language)
+    positive_indicators = [
+        'covered', 'coverage', 'benefit', 'eligible', 'allowed', 'provided',
+        'includes', 'covers', 'reimbursable', 'payable', 'entitled', 'available',
+        'included', 'offered', 'granted', 'approved', 'authorized', 'permitted'
+    ]
+    
+    # Define exclusion indicators (penalty for negative language)
+    exclusion_indicators = [
+        'shall not be liable', 'not covered', 'excluded', 'exclusion',
+        'not payable', 'not eligible', 'not allowed', 'not provided',
+        'not included', 'not entitled', 'not available', 'not offered',
+        'excluded from', 'not applicable', 'not valid', 'void'
+    ]
+    
+    enhanced_results = []
+    for result in retrieval_results:
+        chunk = result['chunk']
+        original_score = result['score']
+        chunk_text_lower = chunk['text'].lower()
+        
+        # Calculate term bonus with dynamic matching
+        term_bonus = 0.0
+        for term, weight in term_weights.items():
+            if term in question_lower and term in chunk_text_lower:
+                term_bonus += weight
+                # Additional bonus for exact matches
+                if term in chunk_text_lower:
+                    term_bonus += weight * 0.5
+        
+        # Calculate section relevance bonus
+        section_bonus = 0.0
+        if chunk.get('section'):
+            section_lower = chunk['section'].lower()
+            for term, weight in term_weights.items():
+                if term in question_lower and term in section_lower:
+                    section_bonus += weight * 0.8
+        
+        # Calculate positive coverage bonus
+        positive_bonus = 0.0
+        for indicator in positive_indicators:
+            if indicator in chunk_text_lower:
+                positive_bonus += 1.0
+        
+        # Calculate exclusion penalty
+        exclusion_penalty = 0.0
+        for indicator in exclusion_indicators:
+            if indicator in chunk_text_lower:
+                exclusion_penalty += 2.0
+        
+        # Calculate length bonus for substantial chunks
+        length_bonus = 0.0
+        if len(chunk['text']) > 100:
+            length_bonus = 0.5
+        
+        # Apply bonuses and penalties
+        enhanced_score = original_score + term_bonus + section_bonus + positive_bonus - exclusion_penalty + length_bonus
+        
+        enhanced_results.append({
+            **result, 'score': enhanced_score, 'original_score': original_score,
+            'term_bonus': term_bonus, 'section_bonus': section_bonus,
+            'positive_bonus': positive_bonus, 'exclusion_penalty': exclusion_penalty,
+            'length_bonus': length_bonus
+        })
+    
+    enhanced_results.sort(key=lambda x: x['score'], reverse=True)
+    return enhanced_results
 
 if __name__ == '__main__':
     # Preload models at startup for faster response times

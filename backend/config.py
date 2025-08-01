@@ -20,6 +20,7 @@ CHUNK_SIZE = 800  # Optimized for better context preservation
 CHUNK_OVERLAP_RATIO = 0.3  # 30% overlap for better context preservation
 CHUNK_OVERLAP = int(CHUNK_SIZE * CHUNK_OVERLAP_RATIO)  # 240 characters overlap
 MIN_CHUNK_LENGTH = 30  # Lowered for better coverage of short but important clauses
+MAX_TOKENS_PER_REQUEST = 1200  # Increased token limit for better answers
 
 # Retrieval Config - Enhanced for accuracy
 BASE_RESULTS = 20  # Increased for better coverage
@@ -104,10 +105,10 @@ CHUNK_CACHE_SIZE = 200  # Number of chunk sets to cache
 
 # New: Hybrid Retrieval Config
 ENABLE_HYBRID_RETRIEVAL = True
-DENSE_WEIGHT = 0.7  # Weight for dense retrieval (FAISS)
-SPARSE_WEIGHT = 0.3  # Weight for sparse retrieval (BM25/TF-IDF)
-BM25_K1 = 1.2  # BM25 parameter k1
-BM25_B = 0.75  # BM25 parameter b
+DENSE_WEIGHT = 0.6  # Reduced weight for dense retrieval (FAISS)
+SPARSE_WEIGHT = 0.4  # Increased weight for sparse retrieval (BM25/TF-IDF)
+BM25_K1 = 1.5  # Increased BM25 parameter k1 for more aggressive matching
+BM25_B = 0.8  # Increased BM25 parameter b for better document length normalization
 
 # New: Model Preloading Config
 PRELOAD_MODELS_AT_STARTUP = True
