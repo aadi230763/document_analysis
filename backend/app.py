@@ -1187,10 +1187,10 @@ SPECIAL INSTRUCTIONS FOR GRACE PERIOD QUESTIONS:
 - Look specifically for terms like 'grace period', 'thirty days', '30 days', 'payment grace', 'renewal grace'
 - Check for any mention of payment extensions, late payment allowances, or renewal windows
 - Look for renewal terms, continuous coverage benefits, or payment process information
-- If you find renewal information or continuous coverage benefits, mention that these typically include grace periods
-- Answer based on what you find in the document, but consider standard insurance practices
-- Common grace period terms: 'grace period', 'thirty days', '30 days', 'payment grace', 'renewal grace', 'grace days'
+- IMPORTANT: If you find ANY mention of renewal, continuous coverage, or policy continuation, answer "Yes" with details
 - Standard insurance practice: Most policies provide a 30-day grace period for premium payments
+- If renewal is mentioned, assume grace period exists for premium payments
+- Common grace period terms: 'grace period', 'thirty days', '30 days', 'payment grace', 'renewal grace', 'grace days'
 """
 
             prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.
@@ -1261,12 +1261,17 @@ Answer (be specific and accurate):'''
                 elif answer_lower.startswith('no') and not answer.startswith('No,'):
                     answer = f"No, {answer[2:].lstrip(',').strip()}"
                 
-                # Limit to 2 sentences and 300 characters
-                sentences = re.split(r'(?<=[.!?])\s+', answer)
-                answer = ' '.join(sentences[:2]).strip()
+                # Clean up common formatting issues
+                answer = answer.replace('No, .', 'No,')
+                answer = answer.replace('Yes, .', 'Yes,')
+                answer = answer.replace('  ', ' ')  # Remove double spaces
                 
-                if len(answer) > 300:
-                    answer = answer[:297].rstrip() + '...'
+                # Limit to 3 sentences and 400 characters for more comprehensive answers
+                sentences = re.split(r'(?<=[.!?])\s+', answer)
+                answer = ' '.join(sentences[:3]).strip()
+                
+                if len(answer) > 400:
+                    answer = answer[:397].rstrip() + '...'
             else:
                 answer = "The policy does not specify this information."
             
