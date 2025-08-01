@@ -17,7 +17,8 @@ COLLECTION_NAME = "insurance_policies_enhanced"
 
 # Processing Config - Optimized for accuracy and performance
 CHUNK_SIZE = 800  # Optimized for better context preservation
-CHUNK_OVERLAP = 100  # Reduced overlap for efficiency
+CHUNK_OVERLAP_RATIO = 0.3  # 30% overlap for better context preservation
+CHUNK_OVERLAP = int(CHUNK_SIZE * CHUNK_OVERLAP_RATIO)  # 240 characters overlap
 MIN_CHUNK_LENGTH = 30  # Lowered for better coverage of short but important clauses
 
 # Retrieval Config - Enhanced for accuracy
@@ -94,3 +95,26 @@ CONTINUITY_SCORE = 6  # Score for continuity mention
 POLICY_RENEWAL_SCORE = 10  # Score for policy renewal
 SECTION_RELEVANCE_SCORE = 5  # Score for relevant sections
 LENGTH_BONUS_SCORE = 3  # Score for substantial chunks
+
+# New: Document Caching Config
+ENABLE_DOCUMENT_CACHING = True
+DOCUMENT_CACHE_SIZE = 100  # Number of documents to cache
+EMBEDDING_CACHE_SIZE = 200  # Number of embedding sets to cache
+CHUNK_CACHE_SIZE = 200  # Number of chunk sets to cache
+
+# New: Hybrid Retrieval Config
+ENABLE_HYBRID_RETRIEVAL = True
+DENSE_WEIGHT = 0.7  # Weight for dense retrieval (FAISS)
+SPARSE_WEIGHT = 0.3  # Weight for sparse retrieval (BM25/TF-IDF)
+BM25_K1 = 1.2  # BM25 parameter k1
+BM25_B = 0.75  # BM25 parameter b
+
+# New: Model Preloading Config
+PRELOAD_MODELS_AT_STARTUP = True
+EMBEDDING_MODEL_WARMUP = True
+LLM_MODEL_WARMUP = True
+
+# New: Response Time Optimization
+MAX_RESPONSE_TIME_MS = 10000  # 10 seconds max response time
+ENABLE_RESPONSE_TIME_TRACKING = True
+OPTIMIZE_FOR_SPEED = True  # Trade some accuracy for speed if needed

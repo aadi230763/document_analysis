@@ -8,7 +8,6 @@ from flask import Flask, request, jsonify
 import asyncio
 from config import *
 
-
 import requests
 from config import GEMINI_API_KEY, GEMINI_API_URL
 import atexit
@@ -32,10 +31,121 @@ from email import policy
 from email.parser import BytesParser
 import base64
 import pdfplumber
+from sentence_transformers import SentenceTransformer
+from nltk.tokenize import sent_tokenize
+from sklearn.feature_extraction.text import TfidfVectorizer
+import hashlib
+import pickle
+import os.path
+from pathlib import Path
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("doc_parser")
+
+# Document caching system
+class DocumentCache:
+    def __init__(self, cache_dir="cache", max_size=100):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+        self.max_size = max_size
+        self.cache_metadata_file = self.cache_dir / "cache_metadata.json"
+        self.cache_metadata = self._load_cache_metadata()
+    
+    def _load_cache_metadata(self):
+        """Load cache metadata from file"""
+        if self.cache_metadata_file.exists():
+            try:
+                with open(self.cache_metadata_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    def _save_cache_metadata(self):
+        """Save cache metadata to file"""
+        with open(self.cache_metadata_file, 'w') as f:
+            json.dump(self.cache_metadata, f)
+    
+    def _get_document_hash(self, url):
+        """Generate hash for document URL"""
+        return hashlib.md5(url.encode()).hexdigest()
+    
+    def _get_cache_path(self, doc_hash):
+        """Get cache file path for document hash"""
+        return self.cache_dir / f"{doc_hash}.pkl"
+    
+    def get_cached_document(self, url):
+        """Get cached document data if available"""
+        doc_hash = self._get_document_hash(url)
+        cache_path = self._get_cache_path(doc_hash)
+        
+        if cache_path.exists() and doc_hash in self.cache_metadata:
+            try:
+                with open(cache_path, 'rb') as f:
+                    cached_data = pickle.load(f)
+                logger.info(f"Cache hit for document: {url}")
+                return cached_data
+            except Exception as e:
+                logger.error(f"Error loading cached document: {e}")
+        
+        return None
+    
+    def cache_document(self, url, chunks, embeddings=None, metadata=None):
+        """Cache document data"""
+        doc_hash = self._get_document_hash(url)
+        cache_path = self._get_cache_path(doc_hash)
+        
+        # Prepare cache data
+        cache_data = {
+            'url': url,
+            'chunks': chunks,
+            'embeddings': embeddings,
+            'metadata': metadata or {},
+            'cached_at': datetime.now().isoformat()
+        }
+        
+        # Check cache size and evict if necessary
+        if len(self.cache_metadata) >= self.max_size:
+            self._evict_oldest_cache()
+        
+        try:
+            # Save cache data
+            with open(cache_path, 'wb') as f:
+                pickle.dump(cache_data, f)
+            
+            # Update metadata
+            self.cache_metadata[doc_hash] = {
+                'url': url,
+                'cached_at': cache_data['cached_at'],
+                'chunk_count': len(chunks)
+            }
+            self._save_cache_metadata()
+            
+            logger.info(f"Cached document: {url} ({len(chunks)} chunks)")
+        except Exception as e:
+            logger.error(f"Error caching document: {e}")
+    
+    def _evict_oldest_cache(self):
+        """Evict oldest cache entry"""
+        if not self.cache_metadata:
+            return
+        
+        # Find oldest entry
+        oldest_hash = min(self.cache_metadata.keys(), 
+                         key=lambda k: self.cache_metadata[k]['cached_at'])
+        
+        # Remove from filesystem and metadata
+        cache_path = self._get_cache_path(oldest_hash)
+        if cache_path.exists():
+            cache_path.unlink()
+        
+        del self.cache_metadata[oldest_hash]
+        self._save_cache_metadata()
+        logger.info(f"Evicted cache entry: {oldest_hash}")
+
+# Initialize document cache
+document_cache = DocumentCache()
 
 def parse_document_from_url(url):
     """
@@ -50,6 +160,11 @@ def parse_document_from_url(url):
     import traceback
     import re
     import os
+
+    # Check cache first
+    cached_data = document_cache.get_cached_document(url)
+    if cached_data:
+        return cached_data['chunks']
 
     logger.info(f"Downloading document: {url}")
     try:
@@ -95,70 +210,46 @@ def parse_document_from_url(url):
             headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
         return sorted(set(headers), key=lambda h: text.find(h))
 
-    def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=None):
-        from config import DEFAULT_CHUNK_SIZE
-        if max_chunk_size is None:
-            max_chunk_size = DEFAULT_CHUNK_SIZE
-        """Improved semantic chunking with better context preservation"""
-        if not text.strip():
-            return []
-        
+    def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=512):
+        """Enhanced chunking with proper 30% overlap"""
+        from config import CHUNK_OVERLAP_RATIO
+        sentences = sent_tokenize(text)
         chunks = []
+        overlap_size = int(max_chunk_size * CHUNK_OVERLAP_RATIO)  # 30% overlap
         
-        # Split by paragraphs first
-        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
-        
-        # If no paragraphs, split by sentences
-        if not paragraphs:
-            sentences = re.split(r'(?<=[.!?])\s+', text)
-            paragraphs = [s.strip() for s in sentences if len(s.strip()) > 0]
-        
-        # If still no content, use the whole text as one chunk
-        if not paragraphs:
-            if len(text.strip()) > 0:
-                return [{'text': text.strip(), 'section': section_name, 'type': chunk_type}]
-            return []
-        
-        current_chunk = []
-        current_length = 0
-        
-        for para in paragraphs:
-            para_words = len(para.split())
+        i = 0
+        while i < len(sentences):
+            chunk = []
+            chunk_len = 0
+            start_i = i
             
-            # Skip very short paragraphs unless they're the only content
-            if para_words < 5 and len(paragraphs) > 1:
-                continue
+            # Build chunk up to max size
+            while i < len(sentences) and chunk_len < max_chunk_size:
+                chunk.append(sentences[i])
+                chunk_len += len(sentences[i].split())
+                i += 1
             
-            # If paragraph is too long, split it by sentences
-            if para_words > max_chunk_size // 4:  # Approximate word count
-                sentences = re.split(r'(?<=[.!?])\s+', para)
-                for sent in sentences:
-                    sent_words = len(sent.split())
-                    
-                    # If adding this sentence would exceed limit, save current chunk
-                    if current_length + sent_words > max_chunk_size // 4 and current_chunk:
-                        chunk_text = ' '.join(current_chunk)
-                        add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
-                        current_chunk = [sent]
-                        current_length = sent_words
+            if chunk:
+                chunks.append({
+                    "text": " ".join(chunk),
+                    "section": section_name,
+                    "chunk_type": chunk_type,
+                    "start_sentence": start_i,
+                    "end_sentence": i-1
+                })
+            
+            # Move back by overlap amount for next chunk
+            if i < len(sentences):
+                # Calculate how many sentences to go back for overlap
+                overlap_sentences = 0
+                overlap_len = 0
+                for j in range(i-1, start_i, -1):
+                    if overlap_len + len(sentences[j].split()) <= overlap_size:
+                        overlap_sentences += 1
+                        overlap_len += len(sentences[j].split())
                     else:
-                        current_chunk.append(sent)
-                        current_length += sent_words
-            else:
-                # If adding this paragraph would exceed limit, save current chunk
-                if current_length + para_words > max_chunk_size // 4 and current_chunk:
-                    chunk_text = ' '.join(current_chunk)
-                    add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
-                    current_chunk = [para]
-                    current_length = para_words
-                else:
-                    current_chunk.append(para)
-                    current_length += para_words
-        
-        # Add remaining content as final chunk
-        if current_chunk:
-            chunk_text = ' '.join(current_chunk)
-            add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
+                        break
+                i = max(start_i + 1, i - overlap_sentences)
         
         return chunks
 
@@ -222,6 +313,9 @@ def parse_document_from_url(url):
             logger.info(f"PDF parsing successful, created {len(result)} chunks")
             if not result:
                 logger.warning("PDF parsing completed but no valid chunks were created")
+            
+            # Cache the result
+            document_cache.cache_document(url, result)
             return result
             
         except Exception as e:
@@ -271,6 +365,9 @@ def parse_document_from_url(url):
             logger.info(f"DOCX parsing successful, created {len(result)} chunks")
             if not result:
                 logger.warning("DOCX parsing completed but no valid chunks were created")
+            
+            # Cache the result
+            document_cache.cache_document(url, result)
             return result
             
         except Exception as e:
@@ -295,6 +392,9 @@ def parse_document_from_url(url):
             logger.info(f"EML parsing successful, created {len(result)} chunks")
             if not result:
                 logger.warning("EML parsing completed but no valid chunks were created")
+            
+            # Cache the result
+            document_cache.cache_document(url, result)
             return result
             
         except Exception as e:
@@ -310,6 +410,9 @@ def parse_document_from_url(url):
         logger.info(f"Plain text parsing successful, created {len(result)} chunks")
         if not result:
             logger.warning("Plain text parsing completed but no valid chunks were created")
+        
+        # Cache the result
+        document_cache.cache_document(url, result)
         return result
     except Exception as e:
         logger.error(f"Plain text parsing failed: {e}\n{traceback.format_exc()}")
@@ -330,6 +433,8 @@ def parse_document_from_url(url):
                 result = [c for c in chunks if c['text']]
                 if result:
                     logger.info(f"PDF fallback parsing successful, created {len(result)} chunks")
+                    # Cache the result
+                    document_cache.cache_document(url, result)
                     return result
         except Exception as pdf_fallback_e:
             logger.error(f"PDF fallback parsing also failed: {pdf_fallback_e}")
@@ -1423,6 +1528,69 @@ def semantic_chunking(text):
 
 # Global embedding function to avoid reloading the model
 _embedding_fn = None
+_models_loaded = False
+
+def preload_models():
+    """Preload all models at startup to minimize latency"""
+    global _embedding_fn, _models_loaded
+    
+    if _models_loaded:
+        return
+    
+    from config import PRELOAD_MODELS_AT_STARTUP, EMBEDDING_MODEL_WARMUP, LLM_MODEL_WARMUP
+    
+    if not PRELOAD_MODELS_AT_STARTUP:
+        return
+    
+    logger.info("Preloading models for faster response times...")
+    
+    try:
+        # Preload embedding model
+        if EMBEDDING_MODEL_WARMUP:
+            logger.info("Loading embedding model...")
+            _embedding_fn = SentenceTransformer(str(EMBEDDING_MODEL))
+            # Warm up with sample text
+            _embedding_fn.encode(["warmup text for model initialization"])
+            logger.info("Embedding model loaded successfully")
+        
+        # Preload other models if needed
+        if LLM_MODEL_WARMUP:
+            logger.info("Warming up LLM models...")
+            # Test Gemini API connection
+            try:
+                test_prompt = "Test connection"
+                headers = {"Content-Type": "application/json"}
+                params = {"key": GEMINI_API_KEY}
+                data = {
+                    "contents": [{"parts": [{"text": test_prompt}]}],
+                    "generationConfig": {"maxOutputTokens": 10, "temperature": 0.1}
+                }
+                response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=5)
+                if response.status_code == 200:
+                    logger.info("Gemini API connection successful")
+                else:
+                    logger.warning("Gemini API connection failed")
+            except Exception as e:
+                logger.warning(f"Gemini API warmup failed: {e}")
+            
+            # Test Cohere API connection
+            try:
+                response = co.generate(
+                    model='command-r-plus',
+                    prompt="Test connection",
+                    max_tokens=10,
+                    temperature=0.1
+                )
+                logger.info("Cohere API connection successful")
+            except Exception as e:
+                logger.warning(f"Cohere API warmup failed: {e}")
+        
+        _models_loaded = True
+        logger.info("All models preloaded successfully")
+        
+    except Exception as e:
+        logger.error(f"Error preloading models: {e}")
+        # Continue without preloading if there's an error
 
 def get_embedding_function():
     """Get or create the embedding function singleton"""
@@ -1432,7 +1600,269 @@ def get_embedding_function():
         _embedding_fn = SentenceTransformer(str(EMBEDDING_MODEL))
     return _embedding_fn
 
+# Use a lightweight embedding model
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+embedding_model.encode(["warmup"])  # Warm up at startup
+
+embedding_cache = {}
+chunk_cache = {}
+
+def get_doc_hash(doc_bytes):
+    return hashlib.md5(doc_bytes).hexdigest()
+
+def get_or_cache_embeddings(doc_bytes, text_chunks):
+    doc_hash = get_doc_hash(doc_bytes)
+    if doc_hash in embedding_cache:
+        return embedding_cache[doc_hash], chunk_cache[doc_hash]
+    embeddings = embedding_model.encode([c["text"] for c in text_chunks], show_progress_bar=False)
+    embedding_cache[doc_hash] = embeddings
+    chunk_cache[doc_hash] = text_chunks
+    return embeddings, text_chunks
+
+def hybrid_retrieve(query, chunks, embeddings, top_k=5):
+    """Enhanced hybrid retrieval using both dense and sparse signals"""
+    from config import ENABLE_HYBRID_RETRIEVAL, DENSE_WEIGHT, SPARSE_WEIGHT, BM25_K1, BM25_B
+    
+    if not ENABLE_HYBRID_RETRIEVAL:
+        # Fallback to dense retrieval only
+        query_emb = embedding_model.encode([query])
+        dense_scores = np.dot(embeddings, query_emb.T).squeeze()
+        top_indices = np.argsort(dense_scores)[::-1][:top_k]
+        results = []
+        for idx in top_indices:
+            results.append({
+                "chunk": chunks[idx],
+                "score": float(dense_scores[idx]),
+                "method": "dense_only"
+            })
+        return results
+
+    # Dense retrieval (FAISS-like)
+    query_emb = embedding_model.encode([query])
+    dense_scores = np.dot(embeddings, query_emb.T).squeeze()
+    
+    # Sparse retrieval (BM25/TF-IDF)
+    texts = [c["text"] for c in chunks]
+    
+    # Enhanced TF-IDF with better preprocessing
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    
+    # Custom tokenizer for better insurance terms
+    def custom_tokenizer(text):
+        import re
+        # Split on whitespace and punctuation, but keep insurance terms together
+        tokens = re.findall(r'\b\w+(?:[-_]\w+)*\b', text.lower())
+        # Filter out very short tokens
+        return [token for token in tokens if len(token) > 2]
+    
+    tfidf = TfidfVectorizer(
+        tokenizer=custom_tokenizer,
+        ngram_range=(1, 2),  # Include bigrams for better phrase matching
+        max_features=10000,
+        stop_words='english'
+    )
+    
+    try:
+        tfidf_matrix = tfidf.fit_transform(texts)
+        query_vec = tfidf.transform([query])
+        sparse_scores = cosine_similarity(tfidf_matrix, query_vec).squeeze()
+    except Exception as e:
+        logger.error(f"TF-IDF error: {e}")
+        sparse_scores = np.zeros(len(texts))
+    
+    # BM25 scoring (if available)
+    try:
+        from rank_bm25 import BM25Okapi
+        tokenized_texts = [custom_tokenizer(text) for text in texts]
+        bm25 = BM25Okapi(tokenized_texts, k1=BM25_K1, b=BM25_B)
+        tokenized_query = custom_tokenizer(query)
+        bm25_scores = bm25.get_scores(tokenized_query)
+        # Normalize BM25 scores to 0-1 range
+        if len(bm25_scores) > 0:
+            bm25_scores = (bm25_scores - bm25_scores.min()) / (bm25_scores.max() - bm25_scores.min() + 1e-8)
+        else:
+            bm25_scores = np.zeros(len(texts))
+    except ImportError:
+        logger.warning("rank_bm25 not available, using TF-IDF only")
+        bm25_scores = sparse_scores
+    
+    # Combine scores with configurable weights
+    combined_scores = (
+        DENSE_WEIGHT * dense_scores + 
+        SPARSE_WEIGHT * 0.5 * (sparse_scores + bm25_scores)
+    )
+    
+    # Get top results
+    top_indices = np.argsort(combined_scores)[::-1][:top_k]
+    results = []
+    
+    for idx in top_indices:
+        results.append({
+            "chunk": chunks[idx],
+            "score": float(combined_scores[idx]),
+            "dense_score": float(dense_scores[idx]),
+            "sparse_score": float(sparse_scores[idx]),
+            "bm25_score": float(bm25_scores[idx]),
+            "method": "hybrid"
+        })
+    
+    return results
+
+def build_llm_prompt(context, question):
+    """Enhanced LLM prompt that ensures evidence-based responses"""
+    return (
+        "You are an expert document analysis assistant. Answer the following question using ONLY the provided context. "
+        "CRITICAL INSTRUCTIONS:\n"
+        "1. Base your answer EXCLUSIVELY on the information provided in the context\n"
+        "2. If the answer is not present in the context, reply: 'Not found in the document.'\n"
+        "3. Do not make assumptions or use external knowledge\n"
+        "4. If the context contains conflicting information, acknowledge this\n"
+        "5. Be specific and cite relevant parts of the context when possible\n"
+        "6. Keep answers concise but comprehensive\n\n"
+        f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+    )
+
+@app.route('/optimized_query', methods=['POST'])
+def handle_optimized_query():
+    """
+    Optimized query endpoint with enhanced accuracy and response time
+    - Uses 30% overlap chunking
+    - Implements document caching with URL hash
+    - Uses hybrid retrieval (dense + sparse)
+    - Preloaded models for faster response
+    - Evidence-based LLM responses
+    """
+    tracker = PerformanceTracker()
+    tracker.start()
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        url = data.get('url', '').strip()
+        questions = data.get('questions', [])
+        
+        if not url:
+            return jsonify({"error": "No document URL provided"}), 400
+        
+        if not questions:
+            return jsonify({"error": "No questions provided"}), 400
+        
+        if isinstance(questions, str):
+            questions = [questions]
+        
+        logger.info(f"Processing {len(questions)} questions for document: {url}")
+        
+        # Check document cache first
+        cached_data = document_cache.get_cached_document(url)
+        if cached_data:
+            chunks = cached_data['chunks']
+            embeddings = cached_data.get('embeddings')
+            logger.info(f"Using cached document with {len(chunks)} chunks")
+        else:
+            # Parse document and cache it
+            logger.info("Parsing new document...")
+            chunks = parse_document_from_url(url)
+            
+            if not chunks:
+                return jsonify({"error": "No valid text chunks found in document"}), 400
+            
+            # Generate embeddings
+            embedding_fn = get_embedding_function()
+            chunk_texts = [c['text'] for c in chunks]
+            embeddings = embedding_fn.encode(chunk_texts, show_progress_bar=False)
+            
+            # Cache the document with embeddings
+            document_cache.cache_document(url, chunks, embeddings)
+        
+        # Process each question
+        answers = []
+        for i, question in enumerate(questions):
+            logger.info(f"Processing question {i+1}/{len(questions)}: {question}")
+            
+            # Use hybrid retrieval for better accuracy
+            retrieval_results = hybrid_retrieve(question, chunks, embeddings, top_k=10)
+            
+            if not retrieval_results:
+                answers.append("Not found in the document.")
+                continue
+            
+            # Prepare context from top results
+            context_parts = []
+            for result in retrieval_results[:5]:  # Use top 5 results
+                chunk = result['chunk']
+                score = result['score']
+                context_parts.append(f"[Score: {score:.3f}] {chunk['text']}")
+            
+            context = "\n\n".join(context_parts)
+            
+            # Build enhanced prompt
+            prompt = build_llm_prompt(context, question)
+            
+            # Generate answer with fallback
+            answer = None
+            model_used = None
+            
+            try:
+                # Try Gemini first
+                answer = gemini_generate(prompt, max_tokens=200, temperature=0.1)
+                if answer and 'error' not in answer.lower() and 'timed out' not in answer.lower():
+                    model_used = "gemini"
+                else:
+                    raise Exception('Gemini failed or returned error')
+            except Exception as e:
+                logger.warning(f"Gemini error: {str(e)}")
+                try:
+                    # Fallback to Cohere
+                    response = co.generate(
+                        model='command-r-plus',
+                        prompt=prompt,
+                        max_tokens=200,
+                        temperature=0.1
+                    )
+                    answer = response.generations[0].text.strip()
+                    if answer:
+                        model_used = "cohere"
+                    else:
+                        raise Exception('Cohere returned empty response')
+                except Exception as e:
+                    logger.error(f"Cohere error: {str(e)}")
+                    answer = "Not found in the document."
+                    model_used = "none"
+            
+            # Clean up answer
+            if answer:
+                answer = answer.strip()
+                # Ensure it's not too long
+                if len(answer) > 500:
+                    answer = answer[:497] + "..."
+            
+            answers.append(answer)
+            logger.info(f"Answer {i+1} ({model_used}): {answer}")
+        
+        response_data = {
+            "answers": answers,
+            "response_time_ms": tracker.get_response_time_ms(),
+            "document_url": url,
+            "questions_processed": len(questions),
+            "chunks_used": len(chunks)
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Unexpected error in optimized_query: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        return jsonify({"error": error_msg, "response_time_ms": tracker.get_response_time_ms()}), 500
+
 if __name__ == '__main__':
+    # Preload models at startup for faster response times
+    preload_models()
+    
     # Get port from environment variable (for production) or use 5001
     port = int(os.environ.get('PORT', 5001))
     # Simple server run without debug
