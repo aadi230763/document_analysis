@@ -1436,30 +1436,22 @@ Answer (be comprehensive and detailed with specific policy references):'''
             
             # --- Enhanced answer cleaning ---
             if answer:
-                # Clean up answer
                 answer = answer.strip()
-                answer = re.sub(r'^\{"answer":\s*"|"\}$', '', answer)
-                answer = re.sub(r'^Answer:\s*', '', answer, flags=re.IGNORECASE)
-                
-                # Ensure proper sentence structure
-                answer_lower = answer.lower()
-                if answer_lower.startswith('yes') and not answer.startswith('Yes,'):
-                    answer = f"Yes, {answer[3:].lstrip(',').strip()}"
-                elif answer_lower.startswith('no') and not answer.startswith('No,'):
-                    answer = f"No, {answer[2:].lstrip(',').strip()}"
-                
-                # Clean up common formatting issues
-                answer = answer.replace('No, .', 'No,')
-                answer = answer.replace('Yes, .', 'Yes,')
-                answer = answer.replace('  ', ' ')  # Remove double spaces
-                
-                # Optimize answer length for speed
-                from config import MAX_ANSWER_SENTENCES, MAX_ANSWER_CHARACTERS
-                sentences = re.split(r'(?<=[.!?])\s+', answer)
-                answer = ' '.join(sentences[:MAX_ANSWER_SENTENCES]).strip()
-                
-                if len(answer) > MAX_ANSWER_CHARACTERS:
-                    answer = answer[:MAX_ANSWER_CHARACTERS-3].rstrip() + '...'
+                # Check if answer indicates no information found - be less aggressive
+                if any(phrase in answer.lower() for phrase in ['not found in the document', 'no information available', 'not mentioned anywhere', 'not specified anywhere']):
+                    answer = "Not found in the document."
+                # If answer contains positive coverage information, keep it even if it starts with "No"
+                elif any(positive_word in answer.lower() for positive_word in ['covered', 'coverage', 'benefit', 'eligible', 'allowed', 'provided', 'includes', 'covers', 'reimbursable', 'payable', 'entitled', 'available', 'included', 'offered', 'granted', 'approved', 'authorized', 'permitted']):
+                    # Keep the answer as is - it contains positive coverage information
+                    pass
+                # If answer contains specific amounts, time periods, or conditions, keep it
+                elif any(value_word in answer.lower() for value_word in ['30 days', 'thirty days', '24 months', '36 months', '2 years', '3 years', '5%', '10%', '15%', '20%', '25%', '50%', '75%', '100%']):
+                    # Keep the answer as is - it contains specific values
+                    pass
+                else:
+                    # Only convert to "Not found" if it's clearly a negative response without useful information
+                    if answer.lower().startswith('no') and len(answer) < 100:
+                        answer = "Not found in the document."
             else:
                 answer = "The policy does not specify this information."
             
@@ -1763,7 +1755,9 @@ def build_llm_prompt(context, question):
         - Look for ANY mention of "grace period", "grace", "renewal", "payment", "premium"
         - Search for terms like "payment period", "renewal period", "continuous coverage"
         - Check for policy renewal, payment terms, and continuity benefits
+        - Look for ANY time period mentioned with payment or renewal (e.g., "30 days", "thirty days")
         - If you find ANY grace period information, state it clearly
+        - IMPORTANT: Even if it's in an exclusion section, look for positive statements about grace periods
         """
     elif any(term in question_lower for term in ['waiting period', 'pre-existing', 'existing condition', 'time period']):
         specific_instructions = """
@@ -1772,6 +1766,7 @@ def build_llm_prompt(context, question):
         - Search for "pre-existing", "existing condition", "prior condition", "time limit"
         - Check for specific time periods mentioned in exclusions or conditions
         - Look for "covered after" followed by time periods
+        - IMPORTANT: Look for statements like "covered after X months" even in exclusion sections
         """
     
     # Coverage types
@@ -1782,6 +1777,8 @@ def build_llm_prompt(context, question):
         - Search for age limits, waiting periods, coverage conditions
         - Check both inclusion and exclusion sections for maternity information
         - Look for continuous coverage requirements and lawful termination
+        - IMPORTANT: Look for statements like "covered after X months" for maternity
+        - IMPORTANT: Check for positive coverage statements even in exclusion sections
         """
     elif any(term in question_lower for term in ['surgery', 'surgical', 'operation', 'procedure', 'cataract']):
         specific_instructions = """
@@ -1789,6 +1786,7 @@ def build_llm_prompt(context, question):
         - Look for "surgery", "surgical", "operation", "procedure", "cataract", "eye surgery"
         - Search for waiting periods, exclusion periods, time requirements
         - Check for specific conditions and coverage limits
+        - IMPORTANT: Look for "covered after X years" statements
         """
     elif any(term in question_lower for term in ['organ donor', 'donor', 'transplantation', 'transplant']):
         specific_instructions = """
@@ -1796,6 +1794,7 @@ def build_llm_prompt(context, question):
         - Look for "organ donor", "donor", "transplantation", "transplant", "harvesting"
         - Search for hospitalization, pre/post hospitalization, complications
         - Check for coverage limits and exclusions
+        - IMPORTANT: Look for what IS covered, not just what's excluded
         """
     
     # Financial concepts
@@ -1805,6 +1804,8 @@ def build_llm_prompt(context, question):
         - Look for "NCD", "no claim discount", "no claim", "claim discount", "discount"
         - Search for renewal terms, flat discount, policy term, bonus
         - Check for conditions and limitations on discounts
+        - IMPORTANT: Look for percentage amounts like "5%", "10%", etc.
+        - IMPORTANT: Look for positive statements about discounts
         """
     elif any(term in question_lower for term in ['room rent', 'accommodation', 'bed charges', 'icu']):
         specific_instructions = """
@@ -1812,6 +1813,7 @@ def build_llm_prompt(context, question):
         - Look for "room rent", "accommodation", "bed charges", "ICU", "intensive care"
         - Search for "sub-limits", "capped", "per day", "daily charges"
         - Check for preferred provider network conditions
+        - IMPORTANT: Look for what IS covered, not just what's excluded
         """
     
     # Medical concepts
@@ -1821,6 +1823,7 @@ def build_llm_prompt(context, question):
         - Look for "health check", "preventive", "wellness", "screening", "medical check"
         - Search for continuous policy requirements and reimbursable conditions
         - Check for waiting periods and limitations
+        - IMPORTANT: Look for positive coverage statements
         """
     elif any(term in question_lower for term in ['hospital', 'medical institution', 'healthcare facility']):
         specific_instructions = """
@@ -1828,6 +1831,7 @@ def build_llm_prompt(context, question):
         - Look for "hospital", "medical institution", "healthcare facility", "clinic"
         - Search for registration requirements, staff requirements, daily records
         - Check for inpatient/outpatient distinctions
+        - IMPORTANT: Look for definitions and requirements
         """
     elif any(term in question_lower for term in ['ayush', 'ayurveda', 'traditional medicine', 'alternative medicine']):
         specific_instructions = """
@@ -1835,6 +1839,7 @@ def build_llm_prompt(context, question):
         - Look for "AYUSH", "Ayurveda", "Yoga", "Naturopathy", "Unani", "Siddha", "Homeopathy"
         - Search for "traditional medicine", "alternative medicine", "inpatient treatment"
         - Check for recognized hospital requirements and coverage limits
+        - IMPORTANT: Look for positive coverage statements
         """
     
     # General coverage concepts
@@ -1852,22 +1857,28 @@ def build_llm_prompt(context, question):
         "CRITICAL INSTRUCTIONS:\n"
         "- Read ALL policy clauses carefully and thoroughly.\n"
         "- Look for specific details, amounts, time periods, conditions, and requirements.\n"
-        "- Start with \"Yes,\" if coverage exists OR \"No,\" if explicitly excluded.\n"
+        "- IMPORTANT: Start with \"Yes,\" if coverage exists OR \"No,\" if explicitly excluded.\n"
+        "- IMPORTANT: If you find ANY positive coverage information, state it clearly.\n"
         "- Include specific amounts, time periods, conditions, and requirements when mentioned.\n"
         "- Be comprehensive and detailed - provide full context and conditions.\n"
         "- Include specific policy sections, exclusions, and limitations when mentioned.\n"
         "- If the answer involves conditions or limitations, mention them clearly.\n"
         "- Provide complete information about eligibility, waiting periods, and coverage limits.\n"
-        "- IMPORTANT: Look for positive coverage statements (covered, eligible, allowed, provided, includes, covers, reimbursable, payable, included, offered, granted).\n"
+        "- IMPORTANT: Look for positive coverage statements (covered, eligible, allowed, provided, includes, covers, reimbursable, payable, included, offered, granted, approved, authorized, permitted).\n"
         "- IMPORTANT: Be careful with exclusion language - look for exceptions and conditions within exclusions.\n"
         "- IMPORTANT: Check for coverage that exists despite being in exclusion sections (e.g., 'covered after X months').\n"
         "- IMPORTANT: Look for time-based conditions, waiting periods, and renewal terms.\n"
         "- IMPORTANT: Check for financial terms like discounts, sub-limits, and payment conditions.\n"
+        "- IMPORTANT: If you find ANY relevant information, even if it's mixed with exclusions, mention it.\n"
+        "- IMPORTANT: Look for statements that start with positive words even if they're in exclusion sections.\n"
+        "- IMPORTANT: Check for specific amounts, percentages, time periods, and conditions.\n"
+        "- IMPORTANT: If the question asks about something and you find ANY mention of it, provide that information.\n"
         "- Only say \"Not found in the document.\" if absolutely no relevant information exists in the provided context.\n"
         "- Do not make assumptions or use external knowledge.\n"
         "- If the context contains conflicting information, acknowledge this.\n"
         "- Be specific and cite relevant parts of the context when possible.\n"
         "- Keep answers concise but comprehensive.\n"
+        "- IMPORTANT: If you find the information, say \"Yes\" and provide details. If you don't find it, say \"No\" or \"Not found.\"\n"
         f"{specific_instructions}\n"
         f"Policy Clauses:\n{context}\n\nQuestion: {question}\n\nAnswer:"
     )
@@ -1992,7 +2003,7 @@ def handle_optimized_query():
             logger.info(f"Expanded query: {expanded_question}")
             
             # Use hybrid retrieval for better accuracy - increased top_k for more context
-            retrieval_results = hybrid_retrieve(expanded_question, chunks, embeddings, top_k=25)
+            retrieval_results = hybrid_retrieve(expanded_question, chunks, embeddings, top_k=35)
             
             if not retrieval_results:
                 answers.append("Not found in the document.")
@@ -2002,7 +2013,7 @@ def handle_optimized_query():
             enhanced_results = enhance_retrieval_scores(retrieval_results, question)
             
             # Use the new context preparation function with token limits - increased for better coverage
-            context = prepare_llm_context(enhanced_results, question, MAX_TOKENS_PER_REQUEST + 400)
+            context = prepare_llm_context(enhanced_results, question, MAX_TOKENS_PER_REQUEST + 600)
             
             if not context.strip():
                 answers.append("Not found in the document.")
@@ -2017,7 +2028,7 @@ def handle_optimized_query():
             
             try:
                 # Try Gemini first
-                answer = gemini_generate(prompt, max_tokens=200, temperature=0.1)
+                answer = gemini_generate(prompt, max_tokens=300, temperature=0.05)
                 if answer and 'error' not in answer.lower() and 'timed out' not in answer.lower():
                     model_used = "gemini"
                 else:
@@ -2029,8 +2040,8 @@ def handle_optimized_query():
                     response = co.generate(
                         model='command-r-plus',
                         prompt=prompt,
-                        max_tokens=200,
-                        temperature=0.1
+                        max_tokens=300,
+                        temperature=0.05
                     )
                     answer = response.generations[0].text.strip()
                     if answer:
@@ -2045,11 +2056,23 @@ def handle_optimized_query():
             # Clean up answer
             if answer:
                 answer = answer.strip()
-                # Check if answer indicates no information found
-                if any(phrase in answer.lower() for phrase in ['not found', 'no information', 'not mentioned', 'not specified', 'not available']):
+                # Check if answer indicates no information found - be less aggressive
+                if any(phrase in answer.lower() for phrase in ['not found in the document', 'no information available', 'not mentioned anywhere', 'not specified anywhere']):
                     answer = "Not found in the document."
+                # If answer contains positive coverage information, keep it even if it starts with "No"
+                elif any(positive_word in answer.lower() for positive_word in ['covered', 'coverage', 'benefit', 'eligible', 'allowed', 'provided', 'includes', 'covers', 'reimbursable', 'payable', 'entitled', 'available', 'included', 'offered', 'granted', 'approved', 'authorized', 'permitted']):
+                    # Keep the answer as is - it contains positive coverage information
+                    pass
+                # If answer contains specific amounts, time periods, or conditions, keep it
+                elif any(value_word in answer.lower() for value_word in ['30 days', 'thirty days', '24 months', '36 months', '2 years', '3 years', '5%', '10%', '15%', '20%', '25%', '50%', '75%', '100%']):
+                    # Keep the answer as is - it contains specific values
+                    pass
+                else:
+                    # Only convert to "Not found" if it's clearly a negative response without useful information
+                    if answer.lower().startswith('no') and len(answer) < 100:
+                        answer = "Not found in the document."
                 # Ensure it's not too long
-                elif len(answer) > MAX_ANSWER_CHARACTERS:
+                if len(answer) > MAX_ANSWER_CHARACTERS:
                     # Truncate to sentence boundary if possible
                     sentences = safe_sent_tokenize(answer)
                     truncated = ""
@@ -2230,6 +2253,13 @@ def enhance_retrieval_scores(retrieval_results, question):
         'excluded from', 'not applicable', 'not valid', 'void'
     ]
     
+    # Define specific value indicators (bonus for specific amounts, time periods)
+    value_indicators = [
+        '30 days', 'thirty days', '24 months', '36 months', '2 years', '3 years',
+        '5%', '10%', '15%', '20%', '25%', '50%', '75%', '100%',
+        'inr', 'rs', 'rupees', 'dollars', 'usd', 'euro', 'pounds'
+    ]
+    
     enhanced_results = []
     for result in retrieval_results:
         chunk = result['chunk']
@@ -2253,31 +2283,37 @@ def enhance_retrieval_scores(retrieval_results, question):
                 if term in question_lower and term in section_lower:
                     section_bonus += weight * 0.8
         
-        # Calculate positive coverage bonus
+        # Calculate positive coverage bonus (increased weight)
         positive_bonus = 0.0
         for indicator in positive_indicators:
             if indicator in chunk_text_lower:
-                positive_bonus += 1.0
+                positive_bonus += 2.0  # Increased from 1.0 to 2.0
         
-        # Calculate exclusion penalty
+        # Calculate exclusion penalty (reduced penalty)
         exclusion_penalty = 0.0
         for indicator in exclusion_indicators:
             if indicator in chunk_text_lower:
-                exclusion_penalty += 2.0
+                exclusion_penalty += 1.0  # Reduced from 2.0 to 1.0
+        
+        # Calculate value bonus for specific amounts and time periods
+        value_bonus = 0.0
+        for indicator in value_indicators:
+            if indicator in chunk_text_lower:
+                value_bonus += 3.0  # High bonus for specific values
         
         # Calculate length bonus for substantial chunks
         length_bonus = 0.0
         if len(chunk['text']) > 100:
-            length_bonus = 0.5
+            length_bonus = 1.0  # Increased from 0.5 to 1.0
         
         # Apply bonuses and penalties
-        enhanced_score = original_score + term_bonus + section_bonus + positive_bonus - exclusion_penalty + length_bonus
+        enhanced_score = original_score + term_bonus + section_bonus + positive_bonus - exclusion_penalty + value_bonus + length_bonus
         
         enhanced_results.append({
             **result, 'score': enhanced_score, 'original_score': original_score,
             'term_bonus': term_bonus, 'section_bonus': section_bonus,
             'positive_bonus': positive_bonus, 'exclusion_penalty': exclusion_penalty,
-            'length_bonus': length_bonus
+            'value_bonus': value_bonus, 'length_bonus': length_bonus
         })
     
     enhanced_results.sort(key=lambda x: x['score'], reverse=True)
