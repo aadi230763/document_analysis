@@ -1160,8 +1160,8 @@ def hackrx_run():
                     keyword_chunks.append(chunk)
             
             # Use keyword-matched chunks if available, otherwise use top similarity chunks
-            # For grace period questions, get more chunks to ensure we don't miss relevant info
-            max_chunks = 12 if 'grace period' in question_lower or 'grace' in question_lower else 8
+            # Get more chunks for comprehensive answers
+            max_chunks = 15 if 'grace period' in question_lower or 'grace' in question_lower else 12
             
             if keyword_chunks and len(keyword_chunks) >= 2:
                 # Sort by both keyword score and relevance score
@@ -1174,7 +1174,7 @@ def hackrx_run():
             evidence_parts = []
             for idx, chunk in enumerate(filtered_chunks):
                 section_info = f"Section: {chunk.get('section','')}" if chunk.get('section') else "Policy Document"
-                chunk_text = chunk['text'][:500] + "..." if len(chunk['text']) > 500 else chunk['text']
+                chunk_text = chunk['text'][:800] + "..." if len(chunk['text']) > 800 else chunk['text']
                 evidence_parts.append(f"{section_info}\n{chunk_text}")
             
             evidence_text = "\n\n---\n\n".join(evidence_parts)
@@ -1200,17 +1200,18 @@ IMPORTANT INSTRUCTIONS:
 - Look for specific details, amounts, time periods, and conditions
 - Start with "Yes," if coverage exists OR "No," if explicitly excluded
 - Include specific amounts, time periods, conditions, and requirements when mentioned
-- Be comprehensive but concise (maximum 2 sentences, up to 300 characters)
-- Only say "The policy does not specify" if absolutely no relevant information exists
-- Reference specific policy sections when possible
-- If the answer involves conditions or limitations, mention them clearly{grace_period_focus}
+- Be comprehensive and detailed - provide full context and conditions
+- Include specific policy sections, exclusions, and limitations when mentioned
+- If the answer involves conditions or limitations, mention them clearly
+- Provide complete information about eligibility, waiting periods, and coverage limits
+- Only say "The policy does not specify" if absolutely no relevant information exists{grace_period_focus}
 
 Question: "{question}"
 
 Policy Clauses:
 {evidence_text}
 
-Answer (be specific and accurate):'''
+Answer (be comprehensive and detailed):'''
             
             # --- Enhanced answer generation with fallback and grace period handling ---
             answer = None
@@ -1220,7 +1221,7 @@ Answer (be specific and accurate):'''
             is_grace_period_question = 'grace period' in question_lower and ('premium' in question_lower or 'payment' in question_lower)
             
             try:
-                answer = gemini_generate(prompt, max_tokens=150, temperature=0.1)
+                answer = gemini_generate(prompt, max_tokens=300, temperature=0.1)
                 if answer and 'error' not in answer.lower() and 'timed out' not in answer.lower():
                     model_used = "gemini"
                 else:
@@ -1231,7 +1232,7 @@ Answer (be specific and accurate):'''
                     response = co.generate(
                         model='command-r-plus',
                         prompt=prompt,
-                        max_tokens=150,
+                        max_tokens=300,
                         temperature=0.1
                     )
                     answer = response.generations[0].text.strip()
@@ -1266,12 +1267,12 @@ Answer (be specific and accurate):'''
                 answer = answer.replace('Yes, .', 'Yes,')
                 answer = answer.replace('  ', ' ')  # Remove double spaces
                 
-                # Limit to 3 sentences and 400 characters for more comprehensive answers
+                # Allow longer answers for comprehensive responses
                 sentences = re.split(r'(?<=[.!?])\s+', answer)
-                answer = ' '.join(sentences[:3]).strip()
+                answer = ' '.join(sentences[:5]).strip()  # Allow up to 5 sentences
                 
-                if len(answer) > 400:
-                    answer = answer[:397].rstrip() + '...'
+                if len(answer) > 600:
+                    answer = answer[:597].rstrip() + '...'
             else:
                 answer = "The policy does not specify this information."
             
