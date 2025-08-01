@@ -1031,19 +1031,25 @@ def hackrx_run():
         
         print(f"Processed {len(processed_chunks)} valid chunks")
         
-        # Optimize chunk processing for better performance
-        max_chunks = min(30, len(processed_chunks))  # Increased for better coverage
+        # Optimize chunk processing for speed
+        max_chunks = min(20, len(processed_chunks))  # Reduced for faster processing
         chunk_texts = [c['text'] for c in processed_chunks[:max_chunks]]
         
-        # Use singleton embedding function
+        # Use singleton embedding function with optimization
         embedding_fn = get_embedding_function()
         chunk_embeddings = embedding_fn.encode(chunk_texts)
+        
+        # Pre-compute question embedding once
+        question_embeddings = {}
         
         answers = []
         for i, question in enumerate(questions):
             print(f"Processing question {i+1}/{len(questions)}: {question}")
             
-            question_embedding = embedding_fn.encode([question])[0]
+            # Cache question embedding
+            if question not in question_embeddings:
+                question_embeddings[question] = embedding_fn.encode([question])[0]
+            question_embedding = question_embeddings[question]
             
             import numpy as np
             def cosine_sim(a, b):
@@ -1063,8 +1069,8 @@ def hackrx_run():
                     'table': processed_chunks[j].get('table', '')
                 })
             
-            # Get more candidates for better coverage
-            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:20]
+            # Get candidates for balanced performance
+            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:15]
             
             # --- Enhanced keyword matching ---
             question_lower = question.lower()
@@ -1183,8 +1189,8 @@ def hackrx_run():
                     keyword_chunks.append(chunk)
             
             # Use keyword-matched chunks if available, otherwise use top similarity chunks
-            # Get more chunks for comprehensive answers
-            max_chunks = 15 if 'grace period' in question_lower or 'grace' in question_lower else 12
+            # Optimize for speed while maintaining accuracy
+            max_chunks = 10 if 'grace period' in question_lower or 'grace' in question_lower else 8
             
             if keyword_chunks and len(keyword_chunks) >= 2:
                 # Sort by both keyword score and relevance score
@@ -1193,11 +1199,11 @@ def hackrx_run():
             else:
                 filtered_chunks = top_chunks[:max_chunks]
             
-            # --- Enhanced evidence preparation ---
+            # --- Optimized evidence preparation ---
             evidence_parts = []
             for idx, chunk in enumerate(filtered_chunks):
                 section_info = f"Section: {chunk.get('section','')}" if chunk.get('section') else "Policy Document"
-                chunk_text = chunk['text'][:800] + "..." if len(chunk['text']) > 800 else chunk['text']
+                chunk_text = chunk['text'][:600] + "..." if len(chunk['text']) > 600 else chunk['text']
                 evidence_parts.append(f"{section_info}\n{chunk_text}")
             
             evidence_text = "\n\n---\n\n".join(evidence_parts)
@@ -1249,7 +1255,7 @@ Answer (be comprehensive and detailed with specific policy references):'''
             is_grace_period_question = 'grace period' in question_lower and ('premium' in question_lower or 'payment' in question_lower)
             
             try:
-                answer = gemini_generate(prompt, max_tokens=300, temperature=0.1)
+                answer = gemini_generate(prompt, max_tokens=200, temperature=0.1)
                 if answer and 'error' not in answer.lower() and 'timed out' not in answer.lower():
                     model_used = "gemini"
                 else:
@@ -1260,7 +1266,7 @@ Answer (be comprehensive and detailed with specific policy references):'''
                     response = co.generate(
                         model='command-r-plus',
                         prompt=prompt,
-                        max_tokens=300,
+                        max_tokens=200,
                         temperature=0.1
                     )
                     answer = response.generations[0].text.strip()
@@ -1295,12 +1301,12 @@ Answer (be comprehensive and detailed with specific policy references):'''
                 answer = answer.replace('Yes, .', 'Yes,')
                 answer = answer.replace('  ', ' ')  # Remove double spaces
                 
-                # Allow longer answers for comprehensive responses
+                # Optimize answer length for speed
                 sentences = re.split(r'(?<=[.!?])\s+', answer)
-                answer = ' '.join(sentences[:5]).strip()  # Allow up to 5 sentences
+                answer = ' '.join(sentences[:3]).strip()  # Limit to 3 sentences for speed
                 
-                if len(answer) > 600:
-                    answer = answer[:597].rstrip() + '...'
+                if len(answer) > 400:
+                    answer = answer[:397].rstrip() + '...'
             else:
                 answer = "The policy does not specify this information."
             
