@@ -43,6 +43,10 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("doc_parser")
 
+# Global variables for model caching
+_embedding_fn = None
+_models_loaded = False
+
 # Document caching system
 class DocumentCache:
     def __init__(self, cache_dir="cache", max_size=100):
@@ -1590,10 +1594,6 @@ def semantic_chunking(text):
     
     return chunks
 
-# Global embedding function to avoid reloading the model
-_embedding_fn = None
-_models_loaded = False
-
 def preload_models():
     """Preload all models at startup to minimize latency"""
     global _embedding_fn, _models_loaded
@@ -1674,9 +1674,7 @@ def get_embedding_function():
 
 # Use a lightweight embedding model
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-embedding_model.encode(["warmup"])  # Warm up at startup
-
+embedding_model = None  # Will be initialized when needed
 embedding_cache = {}
 chunk_cache = {}
 
@@ -1696,10 +1694,15 @@ def hybrid_retrieve(query, chunks, embeddings, top_k=5):
     """Enhanced hybrid retrieval using both dense and sparse signals"""
     from config import ENABLE_HYBRID_RETRIEVAL, DENSE_WEIGHT, SPARSE_WEIGHT, BM25_K1, BM25_B
     
+    # Initialize embedding model if needed
+    global embedding_model
+    if embedding_model is None:
+        embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    
     if not ENABLE_HYBRID_RETRIEVAL:
         # Fallback to dense retrieval only
-    query_emb = embedding_model.encode([query])
-    dense_scores = np.dot(embeddings, query_emb.T).squeeze()
+        query_emb = embedding_model.encode([query])
+        dense_scores = np.dot(embeddings, query_emb.T).squeeze()
         top_indices = np.argsort(dense_scores)[::-1][:top_k]
         results = []
         for idx in top_indices:
@@ -1743,7 +1746,7 @@ def hybrid_retrieve(query, chunks, embeddings, top_k=5):
     
     try:
         tfidf_matrix = tfidf.fit_transform(texts)
-    query_vec = tfidf.transform([query])
+        query_vec = tfidf.transform([query])
         sparse_scores = cosine_similarity(tfidf_matrix, query_vec).squeeze()
     except Exception as e:
         logger.error(f"TF-IDF error: {e}")

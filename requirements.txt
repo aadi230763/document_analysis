@@ -17,5 +17,6 @@ rank-bm25
 scikit-learn
 nltk>=3.8
 faiss-cpu
+gunicorn
 
 # After installation, run: python backend/setup_nltk.py
