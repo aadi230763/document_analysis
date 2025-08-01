@@ -1031,8 +1031,8 @@ def hackrx_run():
         
         print(f"Processed {len(processed_chunks)} valid chunks")
         
-        # Limit chunks to reduce memory usage and improve performance
-        max_chunks = min(25, len(processed_chunks))  # Increased from 20
+        # Optimize chunk processing for better performance
+        max_chunks = min(30, len(processed_chunks))  # Increased for better coverage
         chunk_texts = [c['text'] for c in processed_chunks[:max_chunks]]
         
         # Use singleton embedding function
@@ -1064,13 +1064,13 @@ def hackrx_run():
                 })
             
             # Get more candidates for better coverage
-            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:12]
+            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:20]
             
             # --- Enhanced keyword matching ---
             question_lower = question.lower()
             question_words = [word.strip('.,?!()[]{}"') for word in question_lower.split() if len(word.strip('.,?!()[]{}"')) > 2]
             
-            # Comprehensive insurance keyword expansion
+            # Comprehensive insurance keyword expansion with semantic variations
             insurance_keywords = []
             
             # Grace period related - Enhanced with more comprehensive terms
@@ -1084,7 +1084,10 @@ def hackrx_run():
                     'payment window', 'renewal window', 'extension period', 'late payment', 'overdue payment',
                     'renewal terms', 'renewal conditions', 'renewal policy', 'renewal process', 'renewal requirements',
                     'continuity benefits', 'continuous coverage', 'uninterrupted coverage', 'policy renewal',
-                    'payment terms', 'payment conditions', 'payment requirements', 'payment process'
+                    'payment terms', 'payment conditions', 'payment requirements', 'payment process',
+                    'renewal', 'renew', 'continue', 'continuation', 'extend', 'extension', 'maintain', 'maintenance',
+                    'policy renewal', 'renewal policy', 'renewal terms', 'renewal conditions', 'renewal process',
+                    'continuous', 'continuity', 'uninterrupted', 'ongoing', 'maintained', 'extended'
                 ])
             
             # Premium related
@@ -1135,28 +1138,48 @@ def hackrx_run():
             
             all_keywords = list(set(question_words + insurance_keywords))
             
-            # --- Enhanced chunk filtering with grace period priority ---
+            # --- Enhanced chunk filtering with comprehensive scoring ---
             keyword_chunks = []
             for chunk in top_chunks:
                 chunk_lower = chunk['text'].lower()
                 matched_keywords = [kw for kw in all_keywords if kw in chunk_lower]
                 
-                # Special scoring for grace period chunks
-                grace_period_score = 0
-                if 'grace period' in chunk_lower:
-                    grace_period_score += 10
-                if 'thirty days' in chunk_lower or '30 days' in chunk_lower:
-                    grace_period_score += 8
-                if 'grace' in chunk_lower and 'payment' in chunk_lower:
-                    grace_period_score += 6
-                if 'grace' in chunk_lower and 'premium' in chunk_lower:
-                    grace_period_score += 6
-                if 'grace' in chunk_lower and 'renewal' in chunk_lower:
-                    grace_period_score += 5
+                # Comprehensive scoring system
+                semantic_score = 0
                 
-                if matched_keywords or grace_period_score > 0:
+                # Grace period specific scoring
+                if 'grace period' in chunk_lower:
+                    semantic_score += 15
+                if 'thirty days' in chunk_lower or '30 days' in chunk_lower:
+                    semantic_score += 12
+                if 'grace' in chunk_lower and 'payment' in chunk_lower:
+                    semantic_score += 10
+                if 'grace' in chunk_lower and 'premium' in chunk_lower:
+                    semantic_score += 10
+                if 'grace' in chunk_lower and 'renewal' in chunk_lower:
+                    semantic_score += 8
+                
+                # Renewal and continuity scoring
+                if 'renewal' in chunk_lower:
+                    semantic_score += 8
+                if 'continuous coverage' in chunk_lower:
+                    semantic_score += 8
+                if 'continuity' in chunk_lower:
+                    semantic_score += 6
+                if 'policy renewal' in chunk_lower:
+                    semantic_score += 10
+                
+                # Section relevance scoring
+                if chunk.get('section') and any(term in chunk.get('section', '').lower() for term in ['exclusion', 'benefit', 'coverage', 'term']):
+                    semantic_score += 5
+                
+                # Length bonus for substantial chunks
+                if len(chunk['text']) > 200:
+                    semantic_score += 3
+                
+                if matched_keywords or semantic_score > 0:
                     chunk['matched_keywords'] = matched_keywords
-                    chunk['keyword_score'] = len(matched_keywords) + grace_period_score
+                    chunk['keyword_score'] = len(matched_keywords) + semantic_score
                     keyword_chunks.append(chunk)
             
             # Use keyword-matched chunks if available, otherwise use top similarity chunks
@@ -1187,23 +1210,28 @@ SPECIAL INSTRUCTIONS FOR GRACE PERIOD QUESTIONS:
 - Look specifically for terms like 'grace period', 'thirty days', '30 days', 'payment grace', 'renewal grace'
 - Check for any mention of payment extensions, late payment allowances, or renewal windows
 - Look for renewal terms, continuous coverage benefits, or payment process information
-- IMPORTANT: If you find ANY mention of renewal, continuous coverage, or policy continuation, answer "Yes" with details
+- CRITICAL: If you find ANY mention of renewal, continuous coverage, or policy continuation, answer "Yes" with details
 - Standard insurance practice: Most policies provide a 30-day grace period for premium payments
 - If renewal is mentioned, assume grace period exists for premium payments
+- Look for terms: 'renewal', 'continuous coverage', 'policy renewal', 'renew', 'continue', 'continuity'
 - Common grace period terms: 'grace period', 'thirty days', '30 days', 'payment grace', 'renewal grace', 'grace days'
+- IMPORTANT: Renewal policies typically include grace periods for premium payments
 """
 
-            prompt = f'''You are an expert insurance policy analyst. Answer the question based ONLY on the policy clauses provided below.
+            prompt = f'''You are an expert insurance policy analyst with deep knowledge of health insurance policies. Answer the question based ONLY on the policy clauses provided below.
 
-IMPORTANT INSTRUCTIONS:
-- Read ALL policy clauses carefully before answering
-- Look for specific details, amounts, time periods, and conditions
+CRITICAL INSTRUCTIONS:
+- Read ALL policy clauses carefully and thoroughly
+- Look for specific details, amounts, time periods, conditions, and requirements
 - Start with "Yes," if coverage exists OR "No," if explicitly excluded
 - Include specific amounts, time periods, conditions, and requirements when mentioned
 - Be comprehensive and detailed - provide full context and conditions
 - Include specific policy sections, exclusions, and limitations when mentioned
 - If the answer involves conditions or limitations, mention them clearly
 - Provide complete information about eligibility, waiting periods, and coverage limits
+- For grace period questions: Look for renewal terms, continuous coverage, and payment processes
+- For waiting periods: Look for specific time periods and conditions
+- For coverage questions: Look for inclusion/exclusion clauses and conditions
 - Only say "The policy does not specify" if absolutely no relevant information exists{grace_period_focus}
 
 Question: "{question}"
@@ -1211,7 +1239,7 @@ Question: "{question}"
 Policy Clauses:
 {evidence_text}
 
-Answer (be comprehensive and detailed):'''
+Answer (be comprehensive and detailed with specific policy references):'''
             
             # --- Enhanced answer generation with fallback and grace period handling ---
             answer = None
