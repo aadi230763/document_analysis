@@ -63,3 +63,34 @@ MIN_CHUNK_CHARACTERS = 20  # Minimum characters for valid chunks
 MAX_CHUNK_CHARACTERS = 1000  # Maximum characters per chunk
 ENABLE_SECTION_AWARE_CHUNKING = True  # Enable section-based chunking
 ENABLE_KEYWORD_ENHANCED_RETRIEVAL = True  # Enable keyword-based enhancement
+
+# LLM Generation Config
+DEFAULT_MAX_TOKENS = 200  # Default token limit for responses
+DEFAULT_TEMPERATURE = 0.1  # Default temperature for generation
+GEMINI_TIMEOUT = 10  # Timeout for Gemini API calls
+DOCUMENT_DOWNLOAD_TIMEOUT = 30  # Timeout for document downloads
+
+# Chunk Processing Config
+DEFAULT_CHUNK_SIZE = 800  # Default chunk size
+DEFAULT_MAX_CHUNKS = 20  # Default max chunks for processing
+DEFAULT_TOP_CHUNKS = 15  # Default top chunks for retrieval
+DEFAULT_FINAL_CHUNKS = 10  # Default final chunks for grace period questions
+DEFAULT_FINAL_CHUNKS_REGULAR = 8  # Default final chunks for regular questions
+
+# Answer Processing Config
+MAX_ANSWER_SENTENCES = 3  # Maximum sentences in answer
+MAX_ANSWER_CHARACTERS = 400  # Maximum characters in answer
+CHUNK_TEXT_LIMIT = 600  # Character limit for chunk text in evidence
+
+# Scoring Config
+GRACE_PERIOD_EXACT_SCORE = 15  # Score for exact grace period match
+GRACE_PERIOD_THIRTY_DAYS_SCORE = 12  # Score for thirty days mention
+GRACE_PERIOD_PAYMENT_SCORE = 10  # Score for grace + payment
+GRACE_PERIOD_PREMIUM_SCORE = 10  # Score for grace + premium
+GRACE_PERIOD_RENEWAL_SCORE = 8  # Score for grace + renewal
+RENEWAL_SCORE = 8  # Score for renewal mention
+CONTINUOUS_COVERAGE_SCORE = 8  # Score for continuous coverage
+CONTINUITY_SCORE = 6  # Score for continuity mention
+POLICY_RENEWAL_SCORE = 10  # Score for policy renewal
+SECTION_RELEVANCE_SCORE = 5  # Score for relevant sections
+LENGTH_BONUS_SCORE = 3  # Score for substantial chunks

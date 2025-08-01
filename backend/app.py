@@ -53,7 +53,8 @@ def parse_document_from_url(url):
 
     logger.info(f"Downloading document: {url}")
     try:
-        resp = requests.get(url, timeout=30)
+        from config import DOCUMENT_DOWNLOAD_TIMEOUT
+        resp = requests.get(url, timeout=DOCUMENT_DOWNLOAD_TIMEOUT)
         resp.raise_for_status()
         content = resp.content
         content_type = resp.headers.get('Content-Type', '').lower()
@@ -94,7 +95,10 @@ def parse_document_from_url(url):
             headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
         return sorted(set(headers), key=lambda h: text.find(h))
 
-    def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=800):
+    def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=None):
+        from config import DEFAULT_CHUNK_SIZE
+        if max_chunk_size is None:
+            max_chunk_size = DEFAULT_CHUNK_SIZE
         """Improved semantic chunking with better context preservation"""
         if not text.strip():
             return []
@@ -518,7 +522,12 @@ token_optimizer = TokenOptimizer()
 
 SYSTEM_PROMPT = """You are an expert insurance policy analyst. Use only the context below to answer the question. If the answer is not in the context, reply: 'The policy does not explicitly state this.'\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"""
 
-def gemini_generate(prompt, max_tokens=512, temperature=0.2):
+def gemini_generate(prompt, max_tokens=None, temperature=None):
+    from config import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, GEMINI_TIMEOUT
+    if max_tokens is None:
+        max_tokens = DEFAULT_MAX_TOKENS
+    if temperature is None:
+        temperature = DEFAULT_TEMPERATURE
     headers = {"Content-Type": "application/json"}
     params = {"key": GEMINI_API_KEY}
     data = {
@@ -679,7 +688,7 @@ Return JSON:
         "generationConfig": {"maxOutputTokens": 512, "temperature": 0.2}
     }
     try:
-        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=10)
+        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=GEMINI_TIMEOUT)
         response.raise_for_status()
         result = response.json()
         text = result["candidates"][0]["content"]["parts"][0]["text"] if "candidates" in result and result["candidates"] else ""
@@ -1032,7 +1041,8 @@ def hackrx_run():
         print(f"Processed {len(processed_chunks)} valid chunks")
         
         # Optimize chunk processing for speed
-        max_chunks = min(20, len(processed_chunks))  # Reduced for faster processing
+        from config import DEFAULT_MAX_CHUNKS
+        max_chunks = min(DEFAULT_MAX_CHUNKS, len(processed_chunks))
         chunk_texts = [c['text'] for c in processed_chunks[:max_chunks]]
         
         # Use singleton embedding function with optimization
@@ -1070,7 +1080,8 @@ def hackrx_run():
                 })
             
             # Get candidates for balanced performance
-            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:15]
+            from config import DEFAULT_TOP_CHUNKS
+            top_chunks = sorted(scored_chunks, key=lambda x: x['relevance_score'], reverse=True)[:DEFAULT_TOP_CHUNKS]
             
             # --- Enhanced keyword matching ---
             question_lower = question.lower()
@@ -1151,37 +1162,44 @@ def hackrx_run():
                 matched_keywords = [kw for kw in all_keywords if kw in chunk_lower]
                 
                 # Comprehensive scoring system
+                from config import (
+                    GRACE_PERIOD_EXACT_SCORE, GRACE_PERIOD_THIRTY_DAYS_SCORE,
+                    GRACE_PERIOD_PAYMENT_SCORE, GRACE_PERIOD_PREMIUM_SCORE,
+                    GRACE_PERIOD_RENEWAL_SCORE, RENEWAL_SCORE, CONTINUOUS_COVERAGE_SCORE,
+                    CONTINUITY_SCORE, POLICY_RENEWAL_SCORE, SECTION_RELEVANCE_SCORE,
+                    LENGTH_BONUS_SCORE
+                )
                 semantic_score = 0
                 
                 # Grace period specific scoring
                 if 'grace period' in chunk_lower:
-                    semantic_score += 15
+                    semantic_score += GRACE_PERIOD_EXACT_SCORE
                 if 'thirty days' in chunk_lower or '30 days' in chunk_lower:
-                    semantic_score += 12
+                    semantic_score += GRACE_PERIOD_THIRTY_DAYS_SCORE
                 if 'grace' in chunk_lower and 'payment' in chunk_lower:
-                    semantic_score += 10
+                    semantic_score += GRACE_PERIOD_PAYMENT_SCORE
                 if 'grace' in chunk_lower and 'premium' in chunk_lower:
-                    semantic_score += 10
+                    semantic_score += GRACE_PERIOD_PREMIUM_SCORE
                 if 'grace' in chunk_lower and 'renewal' in chunk_lower:
-                    semantic_score += 8
+                    semantic_score += GRACE_PERIOD_RENEWAL_SCORE
                 
                 # Renewal and continuity scoring
                 if 'renewal' in chunk_lower:
-                    semantic_score += 8
+                    semantic_score += RENEWAL_SCORE
                 if 'continuous coverage' in chunk_lower:
-                    semantic_score += 8
+                    semantic_score += CONTINUOUS_COVERAGE_SCORE
                 if 'continuity' in chunk_lower:
-                    semantic_score += 6
+                    semantic_score += CONTINUITY_SCORE
                 if 'policy renewal' in chunk_lower:
-                    semantic_score += 10
+                    semantic_score += POLICY_RENEWAL_SCORE
                 
                 # Section relevance scoring
                 if chunk.get('section') and any(term in chunk.get('section', '').lower() for term in ['exclusion', 'benefit', 'coverage', 'term']):
-                    semantic_score += 5
+                    semantic_score += SECTION_RELEVANCE_SCORE
                 
                 # Length bonus for substantial chunks
                 if len(chunk['text']) > 200:
-                    semantic_score += 3
+                    semantic_score += LENGTH_BONUS_SCORE
                 
                 if matched_keywords or semantic_score > 0:
                     chunk['matched_keywords'] = matched_keywords
@@ -1190,7 +1208,8 @@ def hackrx_run():
             
             # Use keyword-matched chunks if available, otherwise use top similarity chunks
             # Optimize for speed while maintaining accuracy
-            max_chunks = 10 if 'grace period' in question_lower or 'grace' in question_lower else 8
+            from config import DEFAULT_FINAL_CHUNKS, DEFAULT_FINAL_CHUNKS_REGULAR
+            max_chunks = DEFAULT_FINAL_CHUNKS if 'grace period' in question_lower or 'grace' in question_lower else DEFAULT_FINAL_CHUNKS_REGULAR
             
             if keyword_chunks and len(keyword_chunks) >= 2:
                 # Sort by both keyword score and relevance score
@@ -1200,10 +1219,11 @@ def hackrx_run():
                 filtered_chunks = top_chunks[:max_chunks]
             
             # --- Optimized evidence preparation ---
+            from config import CHUNK_TEXT_LIMIT
             evidence_parts = []
             for idx, chunk in enumerate(filtered_chunks):
                 section_info = f"Section: {chunk.get('section','')}" if chunk.get('section') else "Policy Document"
-                chunk_text = chunk['text'][:600] + "..." if len(chunk['text']) > 600 else chunk['text']
+                chunk_text = chunk['text'][:CHUNK_TEXT_LIMIT] + "..." if len(chunk['text']) > CHUNK_TEXT_LIMIT else chunk['text']
                 evidence_parts.append(f"{section_info}\n{chunk_text}")
             
             evidence_text = "\n\n---\n\n".join(evidence_parts)
@@ -1255,7 +1275,8 @@ Answer (be comprehensive and detailed with specific policy references):'''
             is_grace_period_question = 'grace period' in question_lower and ('premium' in question_lower or 'payment' in question_lower)
             
             try:
-                answer = gemini_generate(prompt, max_tokens=200, temperature=0.1)
+                from config import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
+                answer = gemini_generate(prompt, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMPERATURE)
                 if answer and 'error' not in answer.lower() and 'timed out' not in answer.lower():
                     model_used = "gemini"
                 else:
@@ -1266,8 +1287,8 @@ Answer (be comprehensive and detailed with specific policy references):'''
                     response = co.generate(
                         model='command-r-plus',
                         prompt=prompt,
-                        max_tokens=200,
-                        temperature=0.1
+                        max_tokens=DEFAULT_MAX_TOKENS,
+                        temperature=DEFAULT_TEMPERATURE
                     )
                     answer = response.generations[0].text.strip()
                     if answer:
@@ -1302,11 +1323,12 @@ Answer (be comprehensive and detailed with specific policy references):'''
                 answer = answer.replace('  ', ' ')  # Remove double spaces
                 
                 # Optimize answer length for speed
+                from config import MAX_ANSWER_SENTENCES, MAX_ANSWER_CHARACTERS
                 sentences = re.split(r'(?<=[.!?])\s+', answer)
-                answer = ' '.join(sentences[:3]).strip()  # Limit to 3 sentences for speed
+                answer = ' '.join(sentences[:MAX_ANSWER_SENTENCES]).strip()
                 
-                if len(answer) > 400:
-                    answer = answer[:397].rstrip() + '...'
+                if len(answer) > MAX_ANSWER_CHARACTERS:
+                    answer = answer[:MAX_ANSWER_CHARACTERS-3].rstrip() + '...'
             else:
                 answer = "The policy does not specify this information."
             

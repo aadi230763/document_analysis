@@ -74,7 +74,8 @@ Text: {text[:1000]}"""
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"maxOutputTokens": 256, "temperature": 0.1}
             }
-            response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=10)
+            from config import GEMINI_TIMEOUT
+            response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=GEMINI_TIMEOUT)
             response.raise_for_status()
             result = response.json()
             text = result["candidates"][0]["content"]["parts"][0]["text"] if "candidates" in result and result["candidates"] else ""

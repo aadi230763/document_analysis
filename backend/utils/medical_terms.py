@@ -44,7 +44,12 @@ MEDICAL_SYNONYMS = {
 # Cache for dynamic synonyms
 SYNONYM_CACHE = {}
 
-def gemini_generate(prompt, max_tokens=64, temperature=0.3):
+def gemini_generate(prompt, max_tokens=None, temperature=None):
+    from config import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, GEMINI_TIMEOUT
+    if max_tokens is None:
+        max_tokens = 64
+    if temperature is None:
+        temperature = 0.3
     headers = {"Content-Type": "application/json"}
     params = {"key": GEMINI_API_KEY}
     data = {
@@ -52,7 +57,7 @@ def gemini_generate(prompt, max_tokens=64, temperature=0.3):
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature}
     }
     try:
-        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=10)
+        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=GEMINI_TIMEOUT)
         response.raise_for_status()
         result = response.json()
         text = result["candidates"][0]["content"]["parts"][0]["text"] if "candidates" in result and result["candidates"] else ""
