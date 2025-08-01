@@ -213,7 +213,7 @@ def parse_document_from_url(url):
     def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=512):
         """Enhanced chunking with proper 30% overlap"""
         from config import CHUNK_OVERLAP_RATIO
-        sentences = sent_tokenize(text)
+        sentences = safe_sent_tokenize(text)
         chunks = []
         overlap_size = int(max_chunk_size * CHUNK_OVERLAP_RATIO)  # 30% overlap
         
@@ -1461,7 +1461,7 @@ def semantic_chunking(text):
     
     # If no paragraphs, split by sentences
     if not paragraphs:
-        sentences = re.split(r'(?<=[.!?])\s+', text)
+        sentences = safe_sent_tokenize(text)
         paragraphs = [s.strip() for s in sentences if len(s.strip()) > 0]
     
     # If still no content, use the whole text as one chunk
@@ -1545,6 +1545,14 @@ def preload_models():
     logger.info("Preloading models for faster response times...")
     
     try:
+        # Download NLTK data if not available
+        try:
+            import nltk
+            nltk.download('punkt', quiet=True)
+            logger.info("NLTK punkt tokenizer downloaded successfully")
+        except Exception as e:
+            logger.warning(f"NLTK download failed: {e}")
+        
         # Preload embedding model
         if EMBEDDING_MODEL_WARMUP:
             logger.info("Loading embedding model...")
@@ -1858,6 +1866,22 @@ def handle_optimized_query():
         error_msg = f"Unexpected error in optimized_query: {str(e)}\n{traceback.format_exc()}"
         logger.error(error_msg)
         return jsonify({"error": error_msg, "response_time_ms": tracker.get_response_time_ms()}), 500
+
+def fallback_sent_tokenize(text):
+    """Fallback sentence tokenization without NLTK dependency"""
+    import re
+    # Simple sentence splitting using regex
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in sentences if s.strip()]
+
+def safe_sent_tokenize(text):
+    """Safe sentence tokenization with fallback"""
+    try:
+        from nltk.tokenize import sent_tokenize
+        return sent_tokenize(text)
+    except Exception as e:
+        logger.warning(f"NLTK tokenization failed, using fallback: {e}")
+        return fallback_sent_tokenize(text)
 
 if __name__ == '__main__':
     # Preload models at startup for faster response times

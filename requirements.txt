@@ -15,5 +15,7 @@ PyPDF2
 Pillow
 rank-bm25
 scikit-learn
-nltk
+nltk>=3.8
 faiss-cpu
+
+# After installation, run: python backend/setup_nltk.py
