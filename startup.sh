@@ -21,4 +21,10 @@ echo "============================================================"
 
 # Change to the backend directory and start the Flask app
 cd /home/site/wwwroot/backend
-python app.py 
+
+# Set environment variables for better error handling
+export FLASK_ENV=production
+export FLASK_DEBUG=0
+
+# Start the Flask app with error handling
+python -u app.py 
