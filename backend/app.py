@@ -135,6 +135,8 @@ def parse_document_from_url(url):
             if para_words > max_chunk_size // 4:  # Approximate word count
                 sentences = re.split(r'(?<=[.!?])\s+', para)
                 for sent in sentences:
+                    if not sent.strip():
+                        continue
                     sent_words = len(sent.split())
                     
                     # If adding this sentence would exceed limit, save current chunk
