@@ -1,4 +1,5 @@
 #!/bin/bash
+
 echo "🚀 Starting LLM-Powered Document Analysis System on Azure"
 echo "============================================================"
 
@@ -21,5 +22,20 @@ echo "============================================================"
 # Change to backend directory
 cd /home/site/wwwroot/backend
 
+# Check if we can import the app
+echo "🔍 Testing imports..."
+python -c "
+try:
+    import app
+    print('✅ App imports successfully')
+except ImportError as e:
+    print(f'⚠️  Import warning: {e}')
+    print('🔄 Continuing with startup...')
+except Exception as e:
+    print(f'❌ Critical error: {e}')
+    exit(1)
+"
+
 # Start the Flask application
+echo "🚀 Starting Flask application..."
 python app.py 

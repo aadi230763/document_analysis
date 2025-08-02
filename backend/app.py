@@ -1064,7 +1064,12 @@ def hackrx_run():
         
         # Use singleton embedding function with optimization
         embedding_fn = get_embedding_function()
-        chunk_embeddings = embedding_fn.encode(chunk_texts)
+        if embedding_fn is None:
+            # Fallback: use simple keyword matching instead of embeddings
+            print("⚠️  Using keyword-based fallback search (embeddings not available)")
+            chunk_embeddings = None
+        else:
+            chunk_embeddings = embedding_fn.encode(chunk_texts)
         
         # Pre-compute question embedding once and add simple caching
         question_embeddings = {}
@@ -1097,28 +1102,50 @@ def hackrx_run():
                         'metadata': chunk.get('metadata', {})
                     })
             else:
-                # Fallback to local embedding search
-                print(f"Using local embedding search for question: {question[:50]}...")
-                if question not in question_embeddings:
-                    question_embeddings[question] = embedding_fn.encode([question])[0]
-                question_embedding = question_embeddings[question]
-                
-                import numpy as np
-                def cosine_sim(a, b):
-                    a = np.array(a)
-                    b = np.array(b)
-                    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
-                
-                scored_chunks = []
-                for j, emb in enumerate(chunk_embeddings):
-                    score = cosine_sim(question_embedding, emb)
-                    scored_chunks.append({
-                        'text': chunk_texts[j],
-                        'relevance_score': score,
-                        'section': processed_chunks[j].get('section', ''),
-                        'type': processed_chunks[j].get('type', ''),
-                        'table': processed_chunks[j].get('table', '')
-                    })
+                # Fallback to local embedding search or keyword search
+                if embedding_fn is not None and chunk_embeddings is not None:
+                    print(f"Using local embedding search for question: {question[:50]}...")
+                    if question not in question_embeddings:
+                        question_embeddings[question] = embedding_fn.encode([question])[0]
+                    question_embedding = question_embeddings[question]
+                    
+                    import numpy as np
+                    def cosine_sim(a, b):
+                        a = np.array(a)
+                        b = np.array(b)
+                        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+                    
+                    scored_chunks = []
+                    for j, emb in enumerate(chunk_embeddings):
+                        score = cosine_sim(question_embedding, emb)
+                        scored_chunks.append({
+                            'text': chunk_texts[j],
+                            'relevance_score': score,
+                            'section': processed_chunks[j].get('section', ''),
+                            'type': processed_chunks[j].get('type', ''),
+                            'table': processed_chunks[j].get('table', '')
+                        })
+                else:
+                    # Fallback to simple keyword matching
+                    print(f"Using keyword-based search for question: {question[:50]}...")
+                    question_lower = question.lower()
+                    scored_chunks = []
+                    for j, chunk_text in enumerate(chunk_texts):
+                        chunk_lower = chunk_text.lower()
+                        # Simple keyword matching score
+                        question_words = set(word.strip('.,?!()[]{}"') for word in question_lower.split() if len(word.strip('.,?!()[]{}"')) > 2)
+                        chunk_words = set(word.strip('.,?!()[]{}"') for word in chunk_lower.split() if len(word.strip('.,?!()[]{}"')) > 2)
+                        if question_words:
+                            score = len(question_words.intersection(chunk_words)) / len(question_words)
+                        else:
+                            score = 0
+                        scored_chunks.append({
+                            'text': chunk_text,
+                            'relevance_score': score,
+                            'section': processed_chunks[j].get('section', ''),
+                            'type': processed_chunks[j].get('type', ''),
+                            'table': processed_chunks[j].get('table', '')
+                        })
             
             # Get candidates for balanced performance
             from config import DEFAULT_TOP_CHUNKS
@@ -1455,8 +1482,12 @@ def get_embedding_function():
     """Get or create the embedding function singleton"""
     global _embedding_fn
     if _embedding_fn is None:
-        from sentence_transformers import SentenceTransformer
-        _embedding_fn = SentenceTransformer(str(EMBEDDING_MODEL))
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedding_fn = SentenceTransformer(str(EMBEDDING_MODEL))
+        except ImportError:
+            print("⚠️  sentence-transformers not available. Using fallback embedding method.")
+            _embedding_fn = None
     return _embedding_fn
 
 if __name__ == '__main__':

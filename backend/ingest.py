@@ -1,14 +1,19 @@
 import pdfplumber
 
 
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    print("⚠️  sentence-transformers not available in ingest.py")
 from config import *
 from pathlib import Path
 import re
 from typing import List, Dict
 import uuid
-import pytesseract
-from pdf2image import convert_from_path
+# import pytesseract  # Requires system dependencies
+# from pdf2image import convert_from_path  # Requires system dependencies
 import camelot
 from datetime import datetime
 import docx
@@ -23,7 +28,11 @@ from config import GEMINI_API_KEY, GEMINI_API_URL
 
 class EnhancedDocumentProcessor:
     def __init__(self):
-        self.embedding_model = SentenceTransformer(str(EMBEDDING_MODEL))
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            self.embedding_model = SentenceTransformer(str(EMBEDDING_MODEL))
+        else:
+            self.embedding_model = None
+            print("⚠️  Embedding model not available in EnhancedDocumentProcessor")
         
 
     def clean_text(self, text: str) -> str:
