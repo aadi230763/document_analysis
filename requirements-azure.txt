@@ -1,3 +1,6 @@
+# Azure-optimized requirements file
+# Simplified to avoid deployment issues
+
 # Core web framework
 Flask==3.0.0
 flask-cors==4.0.0
@@ -24,9 +27,8 @@ faiss-cpu==1.7.4
 # API clients
 cohere==4.37
 pinecone-client==2.2.4
-openai==1.3.7
-tiktoken==0.5.1
 
-# Optional dependencies (commented out to avoid deployment issues)
-# redis==5.0.1
-# celery==5.3.4
+# Note: Removed problematic dependencies:
+# - torch (causes deployment issues)
+# - pytesseract (requires system dependencies)
+# - pdf2image (requires system dependencies) 
