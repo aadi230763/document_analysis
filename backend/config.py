@@ -17,10 +17,8 @@ COLLECTION_NAME = "insurance_policies_enhanced"
 
 # Processing Config - Optimized for accuracy and performance
 CHUNK_SIZE = 800  # Optimized for better context preservation
-CHUNK_OVERLAP_RATIO = 0.3  # 30% overlap for better context preservation
-CHUNK_OVERLAP = int(CHUNK_SIZE * CHUNK_OVERLAP_RATIO)  # 240 characters overlap
+CHUNK_OVERLAP = 100  # Reduced overlap for efficiency
 MIN_CHUNK_LENGTH = 30  # Lowered for better coverage of short but important clauses
-MAX_TOKENS_PER_REQUEST = 1200  # Increased token limit for better answers
 
 # Retrieval Config - Enhanced for accuracy
 BASE_RESULTS = 20  # Increased for better coverage
@@ -67,22 +65,22 @@ ENABLE_SECTION_AWARE_CHUNKING = True  # Enable section-based chunking
 ENABLE_KEYWORD_ENHANCED_RETRIEVAL = True  # Enable keyword-based enhancement
 
 # LLM Generation Config
-DEFAULT_MAX_TOKENS = 200  # Default token limit for responses
-DEFAULT_TEMPERATURE = 0.1  # Default temperature for generation
-GEMINI_TIMEOUT = 10  # Timeout for Gemini API calls
-DOCUMENT_DOWNLOAD_TIMEOUT = 30  # Timeout for document downloads
+DEFAULT_MAX_TOKENS = 300  # Increased for more detailed responses
+DEFAULT_TEMPERATURE = 0.1  # Balanced temperature for comprehensive answers
+GEMINI_TIMEOUT = 10  # Balanced timeout for detailed processing
+DOCUMENT_DOWNLOAD_TIMEOUT = 25  # Balanced timeout for document downloads
 
 # Chunk Processing Config
-DEFAULT_CHUNK_SIZE = 800  # Default chunk size
-DEFAULT_MAX_CHUNKS = 20  # Default max chunks for processing
-DEFAULT_TOP_CHUNKS = 15  # Default top chunks for retrieval
-DEFAULT_FINAL_CHUNKS = 10  # Default final chunks for grace period questions
-DEFAULT_FINAL_CHUNKS_REGULAR = 8  # Default final chunks for regular questions
+DEFAULT_CHUNK_SIZE = 700  # Increased for better context
+DEFAULT_MAX_CHUNKS = 18  # Balanced for coverage and speed
+DEFAULT_TOP_CHUNKS = 12  # Balanced for retrieval
+DEFAULT_FINAL_CHUNKS = 8  # Balanced for grace period questions
+DEFAULT_FINAL_CHUNKS_REGULAR = 6  # Balanced for regular questions
 
 # Answer Processing Config
-MAX_ANSWER_SENTENCES = 3  # Maximum sentences in answer
-MAX_ANSWER_CHARACTERS = 400  # Maximum characters in answer
-CHUNK_TEXT_LIMIT = 600  # Character limit for chunk text in evidence
+MAX_ANSWER_SENTENCES = 4  # Increased for more detailed answers
+MAX_ANSWER_CHARACTERS = 800  # Increased for comprehensive responses
+CHUNK_TEXT_LIMIT = 500  # Increased character limit for evidence
 
 # Scoring Config
 GRACE_PERIOD_EXACT_SCORE = 15  # Score for exact grace period match
@@ -96,26 +94,3 @@ CONTINUITY_SCORE = 6  # Score for continuity mention
 POLICY_RENEWAL_SCORE = 10  # Score for policy renewal
 SECTION_RELEVANCE_SCORE = 5  # Score for relevant sections
 LENGTH_BONUS_SCORE = 3  # Score for substantial chunks
-
-# New: Document Caching Config
-ENABLE_DOCUMENT_CACHING = True
-DOCUMENT_CACHE_SIZE = 100  # Number of documents to cache
-EMBEDDING_CACHE_SIZE = 200  # Number of embedding sets to cache
-CHUNK_CACHE_SIZE = 200  # Number of chunk sets to cache
-
-# New: Hybrid Retrieval Config
-ENABLE_HYBRID_RETRIEVAL = True
-DENSE_WEIGHT = 0.6  # Reduced weight for dense retrieval (FAISS)
-SPARSE_WEIGHT = 0.4  # Increased weight for sparse retrieval (BM25/TF-IDF)
-BM25_K1 = 1.5  # Increased BM25 parameter k1 for more aggressive matching
-BM25_B = 0.8  # Increased BM25 parameter b for better document length normalization
-
-# New: Model Preloading Config
-PRELOAD_MODELS_AT_STARTUP = True
-EMBEDDING_MODEL_WARMUP = True
-LLM_MODEL_WARMUP = True
-
-# New: Response Time Optimization
-MAX_RESPONSE_TIME_MS = 10000  # 10 seconds max response time
-ENABLE_RESPONSE_TIME_TRACKING = True
-OPTIMIZE_FOR_SPEED = True  # Trade some accuracy for speed if needed
