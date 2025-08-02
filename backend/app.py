@@ -1389,8 +1389,8 @@ def semantic_chunking(text):
     # If still no content, use the whole text as one chunk
     if not paragraphs:
         if len(text.strip()) > 0:
-            chunks.append({'text': text.strip()})
-        return chunks
+            return [{'text': text.strip()}]
+        return []
     
     chunks = []
     current_chunk = []
