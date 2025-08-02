@@ -39,6 +39,101 @@ import pdfplumber
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("doc_parser")
 
+def add_chunk(chunks, text, section=None, table=None, chunk_type=None):
+    if text and text.strip():
+        chunks.append({
+            'text': text.strip(),
+            'section': section or '',
+            'table': table or '',
+            'type': chunk_type or ''
+        })
+
+def extract_section_headers(text):
+    """Enhanced section header extraction for insurance documents"""
+    patterns = [
+        r'^(?:Section|Clause|Article)\s+\d+[\.\d]*\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+        r'^(?:Coverage|Benefits|Exclusions|Limitations|Terms|Conditions)\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
+        r'^(?:Policy|Insurance|Premium|Claim|Deductible|Co-pay|Coinsurance)\s+[A-Z][A-Za-z\s]+$',
+        r'^\d+\.\s+[A-Z][A-Z\s]{3,}$',
+        r'^[A-Z][A-Z\s]{3,}$',
+        r'^(?:Grace|Waiting|Exclusion|Inclusion|Coverage|Benefit)\s+Period\s*[:\-]?\s*[A-Z][A-Za-z\s]*$',
+        r'^(?:Network|Non-Network|In-Network|Out-of-Network)\s+[A-Z][A-Za-z\s]+$',
+        r'^(?:Pre-existing|Pre-existing Condition)\s*[:\-]?\s*[A-Z][A-Za-z\s]*$',
+    ]
+    headers = []
+    for pattern in patterns:
+        headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
+    return sorted(set(headers), key=lambda h: text.find(h))
+
+def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=None):
+    from config import DEFAULT_CHUNK_SIZE
+    if max_chunk_size is None:
+        max_chunk_size = DEFAULT_CHUNK_SIZE
+    """Improved semantic chunking with better context preservation"""
+    if not text.strip():
+        return []
+    
+    chunks = []
+    
+    # Split by paragraphs first
+    paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
+    
+    # If no paragraphs, split by sentences
+    if not paragraphs:
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        paragraphs = [s.strip() for s in sentences if len(s.strip()) > 0]
+    
+    # If still no content, use the whole text as one chunk
+    if not paragraphs:
+        if len(text.strip()) > 0:
+            return [{'text': text.strip(), 'section': section_name, 'type': chunk_type}]
+        return []
+    
+    current_chunk = []
+    current_length = 0
+    
+    for para in paragraphs:
+        para_words = len(para.split())
+        
+        # Skip very short paragraphs unless they're the only content
+        if para_words < 5 and len(paragraphs) > 1:
+            continue
+        
+        # If paragraph is too long, split it by sentences
+        if para_words > max_chunk_size // 4:  # Approximate word count
+            sentences = re.split(r'(?<=[.!?])\s+', para)
+            for sent in sentences:
+                if not sent.strip():
+                    continue
+                sent_words = len(sent.split())
+                
+                # If adding this sentence would exceed limit, save current chunk
+                if current_length + sent_words > max_chunk_size // 4 and current_chunk:
+                    chunk_text = ' '.join(current_chunk)
+                    add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
+                    current_chunk = [sent]
+                    current_length = sent_words
+                else:
+                    current_chunk.append(sent)
+                    current_length += sent_words
+        else:
+            # If adding this paragraph would exceed limit, save current chunk
+            if current_length + para_words > max_chunk_size // 4 and current_chunk:
+                chunk_text = ' '.join(current_chunk)
+                add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
+                current_chunk = [para]
+                current_length = para_words
+            else:
+                current_chunk.append(para)
+                current_length += para_words
+    
+    # Add remaining content as final chunk
+    if current_chunk:
+        chunk_text = ' '.join(current_chunk)
+        add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
+    
+    return chunks
+
 def parse_document_from_url(url):
     """
     Download and parse a document from a URL (PDF, DOCX, EML, TXT).
@@ -71,101 +166,6 @@ def parse_document_from_url(url):
         logger.error(f"Failed to download document: {url} | {e}")
         raise Exception(f"Failed to download document: {e}")
 
-    def add_chunk(chunks, text, section=None, table=None, chunk_type=None):
-        if text and text.strip():
-            chunks.append({
-                'text': text.strip(),
-                'section': section or '',
-                'table': table or '',
-                'type': chunk_type or ''
-            })
-
-    def extract_section_headers(text):
-        """Enhanced section header extraction for insurance documents"""
-        patterns = [
-            r'^(?:Section|Clause|Article)\s+\d+[\.\d]*\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
-            r'^(?:Coverage|Benefits|Exclusions|Limitations|Terms|Conditions)\s*[:\-]?\s*[A-Z][A-Za-z\s]+$',
-            r'^(?:Policy|Insurance|Premium|Claim|Deductible|Co-pay|Coinsurance)\s+[A-Z][A-Za-z\s]+$',
-            r'^\d+\.\s+[A-Z][A-Z\s]{3,}$',
-            r'^[A-Z][A-Z\s]{3,}$',
-            r'^(?:Grace|Waiting|Exclusion|Inclusion|Coverage|Benefit)\s+Period\s*[:\-]?\s*[A-Z][A-Za-z\s]*$',
-            r'^(?:Network|Non-Network|In-Network|Out-of-Network)\s+[A-Z][A-Za-z\s]+$',
-            r'^(?:Pre-existing|Pre-existing Condition)\s*[:\-]?\s*[A-Z][A-Za-z\s]*$',
-        ]
-        headers = []
-        for pattern in patterns:
-            headers.extend([m.group() for m in re.finditer(pattern, text, re.MULTILINE)])
-        return sorted(set(headers), key=lambda h: text.find(h))
-
-    def smart_chunk_text(text, section_name="", chunk_type="", max_chunk_size=None):
-        from config import DEFAULT_CHUNK_SIZE
-        if max_chunk_size is None:
-            max_chunk_size = DEFAULT_CHUNK_SIZE
-        """Improved semantic chunking with better context preservation"""
-        if not text.strip():
-            return []
-        
-        chunks = []
-        
-        # Split by paragraphs first
-        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 0]
-        
-        # If no paragraphs, split by sentences
-        if not paragraphs:
-            sentences = re.split(r'(?<=[.!?])\s+', text)
-            paragraphs = [s.strip() for s in sentences if len(s.strip()) > 0]
-        
-        # If still no content, use the whole text as one chunk
-        if not paragraphs:
-            if len(text.strip()) > 0:
-                return [{'text': text.strip(), 'section': section_name, 'type': chunk_type}]
-            return []
-        
-        current_chunk = []
-        current_length = 0
-        
-        for para in paragraphs:
-            para_words = len(para.split())
-            
-            # Skip very short paragraphs unless they're the only content
-            if para_words < 5 and len(paragraphs) > 1:
-                continue
-            
-            # If paragraph is too long, split it by sentences
-            if para_words > max_chunk_size // 4:  # Approximate word count
-                sentences = re.split(r'(?<=[.!?])\s+', para)
-                for sent in sentences:
-                    if not sent.strip():
-                        continue
-                    sent_words = len(sent.split())
-                    
-                    # If adding this sentence would exceed limit, save current chunk
-                    if current_length + sent_words > max_chunk_size // 4 and current_chunk:
-                        chunk_text = ' '.join(current_chunk)
-                        add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
-                        current_chunk = [sent]
-                        current_length = sent_words
-                    else:
-                        current_chunk.append(sent)
-                        current_length += sent_words
-            else:
-                # If adding this paragraph would exceed limit, save current chunk
-                if current_length + para_words > max_chunk_size // 4 and current_chunk:
-                    chunk_text = ' '.join(current_chunk)
-                    add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
-                    current_chunk = [para]
-                    current_length = para_words
-                else:
-                    current_chunk.append(para)
-                    current_length += para_words
-        
-        # Add remaining content as final chunk
-        if current_chunk:
-            chunk_text = ' '.join(current_chunk)
-            add_chunk(chunks, chunk_text, section=section_name, chunk_type=chunk_type)
-        
-        return chunks
-
     # --- Improved PDF logic ---
     if ext == '.pdf' or 'pdf' in content_type:
         logger.info(f"Attempting PDF parsing for {len(content)} bytes")
@@ -188,18 +188,10 @@ def parse_document_from_url(url):
                 full_text = '\n'.join(all_text)
                 logger.info(f"pdfplumber extracted {len(full_text)} characters of text")
             
-            # If still no text, fallback to OCR
+            # If still no text, fallback to OCR (disabled for Azure deployment)
             if not full_text.strip():
-                logger.info("No text from pdfplumber, trying OCR")
-                try:
-                    from pdf2image import convert_from_bytes
-                    import pytesseract
-                    images = convert_from_bytes(content)
-                    all_text = [pytesseract.image_to_string(img) for img in images]
-                    full_text = '\n'.join(all_text)
-                    logger.info(f"OCR extracted {len(full_text)} characters of text")
-                except Exception as ocr_e:
-                    logger.error(f"PDF OCR failed: {ocr_e}")
+                logger.info("No text from pdfplumber, OCR disabled for Azure deployment")
+                logger.warning("OCR functionality disabled - pdf2image and pytesseract not available")
             
             # Enhanced section-aware chunking
             chunks = []
@@ -1064,12 +1056,7 @@ def hackrx_run():
         
         # Use singleton embedding function with optimization
         embedding_fn = get_embedding_function()
-        if embedding_fn is None:
-            # Fallback: use simple keyword matching instead of embeddings
-            print("⚠️  Using keyword-based fallback search (embeddings not available)")
-            chunk_embeddings = None
-        else:
-            chunk_embeddings = embedding_fn.encode(chunk_texts)
+        chunk_embeddings = embedding_fn.encode(chunk_texts)
         
         # Pre-compute question embedding once and add simple caching
         question_embeddings = {}
@@ -1102,50 +1089,28 @@ def hackrx_run():
                         'metadata': chunk.get('metadata', {})
                     })
             else:
-                # Fallback to local embedding search or keyword search
-                if embedding_fn is not None and chunk_embeddings is not None:
-                    print(f"Using local embedding search for question: {question[:50]}...")
-                    if question not in question_embeddings:
-                        question_embeddings[question] = embedding_fn.encode([question])[0]
-                    question_embedding = question_embeddings[question]
-                    
-                    import numpy as np
-                    def cosine_sim(a, b):
-                        a = np.array(a)
-                        b = np.array(b)
-                        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
-                    
-                    scored_chunks = []
-                    for j, emb in enumerate(chunk_embeddings):
-                        score = cosine_sim(question_embedding, emb)
-                        scored_chunks.append({
-                            'text': chunk_texts[j],
-                            'relevance_score': score,
-                            'section': processed_chunks[j].get('section', ''),
-                            'type': processed_chunks[j].get('type', ''),
-                            'table': processed_chunks[j].get('table', '')
-                        })
-                else:
-                    # Fallback to simple keyword matching
-                    print(f"Using keyword-based search for question: {question[:50]}...")
-                    question_lower = question.lower()
-                    scored_chunks = []
-                    for j, chunk_text in enumerate(chunk_texts):
-                        chunk_lower = chunk_text.lower()
-                        # Simple keyword matching score
-                        question_words = set(word.strip('.,?!()[]{}"') for word in question_lower.split() if len(word.strip('.,?!()[]{}"')) > 2)
-                        chunk_words = set(word.strip('.,?!()[]{}"') for word in chunk_lower.split() if len(word.strip('.,?!()[]{}"')) > 2)
-                        if question_words:
-                            score = len(question_words.intersection(chunk_words)) / len(question_words)
-                        else:
-                            score = 0
-                        scored_chunks.append({
-                            'text': chunk_text,
-                            'relevance_score': score,
-                            'section': processed_chunks[j].get('section', ''),
-                            'type': processed_chunks[j].get('type', ''),
-                            'table': processed_chunks[j].get('table', '')
-                        })
+                # Fallback to local embedding search
+                print(f"Using local embedding search for question: {question[:50]}...")
+                if question not in question_embeddings:
+                    question_embeddings[question] = embedding_fn.encode([question])[0]
+                question_embedding = question_embeddings[question]
+                
+                import numpy as np
+                def cosine_sim(a, b):
+                    a = np.array(a)
+                    b = np.array(b)
+                    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+                
+                scored_chunks = []
+                for j, emb in enumerate(chunk_embeddings):
+                    score = cosine_sim(question_embedding, emb)
+                    scored_chunks.append({
+                        'text': chunk_texts[j],
+                        'relevance_score': score,
+                        'section': processed_chunks[j].get('section', ''),
+                        'type': processed_chunks[j].get('type', ''),
+                        'table': processed_chunks[j].get('table', '')
+                    })
             
             # Get candidates for balanced performance
             from config import DEFAULT_TOP_CHUNKS
@@ -1416,8 +1381,8 @@ def semantic_chunking(text):
     # If still no content, use the whole text as one chunk
     if not paragraphs:
         if len(text.strip()) > 0:
-            return [{'text': text.strip()}]
-        return []
+            chunks.append({'text': text.strip()})
+        return chunks
     
     chunks = []
     current_chunk = []
@@ -1482,12 +1447,8 @@ def get_embedding_function():
     """Get or create the embedding function singleton"""
     global _embedding_fn
     if _embedding_fn is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _embedding_fn = SentenceTransformer(str(EMBEDDING_MODEL))
-        except ImportError:
-            print("⚠️  sentence-transformers not available. Using fallback embedding method.")
-            _embedding_fn = None
+        from sentence_transformers import SentenceTransformer
+        _embedding_fn = SentenceTransformer(str(EMBEDDING_MODEL))
     return _embedding_fn
 
 if __name__ == '__main__':

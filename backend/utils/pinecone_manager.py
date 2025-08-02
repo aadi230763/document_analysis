@@ -7,12 +7,7 @@ import hashlib
 import json
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    print("⚠️  sentence-transformers not available in pinecone_manager")
+from sentence_transformers import SentenceTransformer
 from config import (
     PINECONE_API_KEY, PINECONE_ENVIRONMENT, PINECONE_INDEX_NAME,
     PINECONE_DIMENSION, PINECONE_METRIC, PINECONE_TOP_K,
@@ -61,11 +56,6 @@ class PineconeManager:
     
     def _load_embedding_model(self):
         """Load the embedding model"""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            logger.warning("sentence-transformers not available, embedding model not loaded")
-            self.embedding_model = None
-            return
-            
         try:
             self.embedding_model = SentenceTransformer(EMBEDDING_MODEL)
             logger.info(f"Embedding model loaded: {EMBEDDING_MODEL}")
