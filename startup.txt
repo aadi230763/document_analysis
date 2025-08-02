@@ -1,1 +1,1 @@
-python azure_startup.py 
+bash startup.sh 

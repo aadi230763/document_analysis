@@ -1,2 +1,2 @@
 [config]
-command = python azure_startup.py 
+command = bash startup.sh 

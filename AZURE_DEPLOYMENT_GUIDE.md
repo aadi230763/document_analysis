@@ -1,26 +1,27 @@
 # Azure Deployment Guide
 
 ## Current Issue
-Azure is not using the correct startup command and is still trying to run `python start_server.py` instead of `python azure_startup.py`.
+Azure is not using the correct startup command and is still trying to run `python start_server.py` instead of our new startup configuration.
 
 ## Files Created/Updated for Azure Deployment
 
-### 1. `azure_startup.py` ✅
-- Main entry point for Azure App Service
-- Properly adds backend to Python path
+### 1. `startup.sh` ✅ (NEW - Primary Solution)
+- Bash script that Azure will definitely recognize
+- Sets PYTHONPATH to include backend directory
+- Changes to backend directory and runs `python app.py`
 - Handles port configuration from Azure environment
 
-### 2. `startup.txt` ✅
-- Contains: `python azure_startup.py`
-- Should tell Azure which command to run
+### 2. `startup.txt` ✅ (Updated)
+- Contains: `bash startup.sh`
+- Tells Azure to use the shell script
 
 ### 3. `web.config` ✅ (Updated)
 - Configures HTTP Platform Handler
-- Points to `azure_startup.py` as the startup script
+- Points to `startup.sh` as the startup script
 - Sets proper environment variables
 
-### 4. `.deployment` ✅ (New)
-- Contains: `command = python azure_startup.py`
+### 4. `.deployment` ✅ (Updated)
+- Contains: `command = bash startup.sh`
 - Alternative way to specify startup command
 
 ### 5. `runtime.txt` ✅
@@ -52,11 +53,15 @@ git push origin main
 2. Look for these success messages:
    ```
    🚀 Starting LLM-Powered Document Analysis System on Azure
+   ============================================================
    📋 System Information:
       - Server will run on: http://0.0.0.0:8000
       - Hackathon endpoint: POST /hackrx/run
       - Health check: GET /health
+      - Python path: /home/site/wwwroot/backend
+   
    🔧 Starting server...
+   ============================================================
    ```
 
 ### Step 5: Test the Endpoint
@@ -88,6 +93,7 @@ python test_azure_endpoint.py
    - Server will run on: http://0.0.0.0:8000
    - Hackathon endpoint: POST /hackrx/run
    - Health check: GET /health
+   - Python path: /home/site/wwwroot/backend
 
 🔧 Starting server...
 ============================================================
