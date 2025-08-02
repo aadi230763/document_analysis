@@ -1,0 +1,2 @@
+[config]
+command = python azure_startup.py 

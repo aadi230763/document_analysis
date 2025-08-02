@@ -2,7 +2,7 @@ import requests
 import json
 
 # Test the Azure endpoint (replace with your actual Azure URL)
-azure_url = "https://your-azure-app-name.azurewebsites.net/hackrx/run"
+azure_url = "https://bajaj-cjb6e0hqhcgrg7cd.spaincentral-01.azurewebsites.net/hackrx/run"
 headers = {
     "Content-Type": "application/json",
     "Authorization": "Bearer b57bd62a8ac6975e085fe323f226a67b4cf72557d1b87eeb5c8daef5a1df1ecd"
