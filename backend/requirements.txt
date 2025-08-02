@@ -13,3 +13,13 @@ flask-cors
 requests
 PyPDF2
 Pillow
+rank-bm25
+scikit-learn
+nltk>=3.8
+faiss-cpu
+gunicorn
+pinecone-client
+openai
+tiktoken
+redis
+celery

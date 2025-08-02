@@ -11,7 +11,14 @@ LLM_MODEL = BASE_DIR / "models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
 GEMINI_API_URL = os.getenv("GEMINI_API_URL", "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent")
 
-# ChromaDB Config
+# Pinecone Config - NEW
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "YOUR_PINECONE_API_KEY")
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "insurance-policies")
+PINECONE_DIMENSION = 384  # BGE-small-en dimension
+PINECONE_METRIC = "cosine"
+
+# ChromaDB Config (Fallback)
 CHROMA_DIR = BASE_DIR / "chroma_db"
 COLLECTION_NAME = "insurance_policies_enhanced"
 
@@ -94,3 +101,11 @@ CONTINUITY_SCORE = 6  # Score for continuity mention
 POLICY_RENEWAL_SCORE = 10  # Score for policy renewal
 SECTION_RELEVANCE_SCORE = 5  # Score for relevant sections
 LENGTH_BONUS_SCORE = 3  # Score for substantial chunks
+
+# Pinecone Optimization Config - NEW
+PINECONE_TOP_K = 50  # Retrieve more candidates for better accuracy
+PINECONE_FILTER_THRESHOLD = 0.3  # Minimum similarity threshold
+PINECONE_NAMESPACE_PREFIX = "policy_"  # Namespace prefix for organization
+ENABLE_PINECONE_HYBRID_SEARCH = True  # Enable hybrid search
+PINECONE_SPARSE_WEIGHT = 0.3  # Weight for sparse search
+PINECONE_DENSE_WEIGHT = 0.7  # Weight for dense search

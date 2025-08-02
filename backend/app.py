@@ -346,6 +346,9 @@ CORS(app)
 COHERE_API_KEY = os.getenv("COHERE_API_KEY", "qZmghdKw7d7YxNryMj57OsMN0jLsQSCy0c7xulRA")
 co = cohere.Client(COHERE_API_KEY)
 
+# === PINECONE INTEGRATION ===
+from utils.pinecone_manager import pinecone_manager
+
 def llm(prompt, max_tokens=512, temperature=0.2):
     response = co.generate(
         model='command-r-plus',
@@ -958,10 +961,14 @@ def handle_feedback():
 
 @app.route('/health', methods=['GET'])
 def health_check():
+    # Get Pinecone stats
+    pinecone_stats = pinecone_manager.get_stats() if 'pinecone_manager' in globals() else {"status": "not_available"}
+    
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "cache_size": len(query_cache)
+        "cache_size": len(query_cache),
+        "pinecone": pinecone_stats
     })
 
 # --- Refactor /hackrx/run ---
@@ -1022,7 +1029,7 @@ def hackrx_run():
         
         print(f"Extracted {len(chunks)} chunks from document")
         
-        # --- Enhanced chunk processing ---
+        # --- Enhanced chunk processing with Pinecone storage ---
         # Filter out very short chunks and clean up text
         processed_chunks = []
         for chunk in chunks:
@@ -1041,6 +1048,11 @@ def hackrx_run():
             return jsonify({"error": "No valid text chunks found after processing"}), 400
         
         print(f"Processed {len(processed_chunks)} valid chunks")
+        
+        # Store chunks in Pinecone for high-performance retrieval
+        if pinecone_manager.index:
+            print("Storing chunks in Pinecone for optimized retrieval...")
+            pinecone_manager.store_document_chunks(processed_chunks, documents)
         
         # Optimize chunk processing for speed
         from config import DEFAULT_MAX_CHUNKS
@@ -1065,28 +1077,46 @@ def hackrx_run():
                 answers.append(answer_cache[question])
                 continue
             
-            # Cache question embedding
-            if question not in question_embeddings:
-                question_embeddings[question] = embedding_fn.encode([question])[0]
-            question_embedding = question_embeddings[question]
-            
-            import numpy as np
-            def cosine_sim(a, b):
-                a = np.array(a)
-                b = np.array(b)
-                return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
-            
-            # --- Enhanced scoring and retrieval ---
-            scored_chunks = []
-            for j, emb in enumerate(chunk_embeddings):
-                score = cosine_sim(question_embedding, emb)
-                scored_chunks.append({
-                    'text': chunk_texts[j],
-                    'relevance_score': score,
-                    'section': processed_chunks[j].get('section', ''),
-                    'type': processed_chunks[j].get('type', ''),
-                    'table': processed_chunks[j].get('table', '')
-                })
+            # --- Enhanced retrieval using Pinecone hybrid search ---
+            if pinecone_manager.index:
+                # Use Pinecone for high-performance retrieval
+                print(f"Using Pinecone hybrid search for question: {question[:50]}...")
+                retrieved_chunks = pinecone_manager.hybrid_search(question, documents, top_k=20)
+                
+                # Convert to standard format
+                scored_chunks = []
+                for chunk in retrieved_chunks:
+                    scored_chunks.append({
+                        'text': chunk['text'],
+                        'relevance_score': chunk.get('combined_score', chunk.get('similarity_score', 0)),
+                        'section': chunk.get('section', ''),
+                        'type': chunk.get('type', ''),
+                        'table': chunk.get('table', ''),
+                        'metadata': chunk.get('metadata', {})
+                    })
+            else:
+                # Fallback to local embedding search
+                print(f"Using local embedding search for question: {question[:50]}...")
+                if question not in question_embeddings:
+                    question_embeddings[question] = embedding_fn.encode([question])[0]
+                question_embedding = question_embeddings[question]
+                
+                import numpy as np
+                def cosine_sim(a, b):
+                    a = np.array(a)
+                    b = np.array(b)
+                    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+                
+                scored_chunks = []
+                for j, emb in enumerate(chunk_embeddings):
+                    score = cosine_sim(question_embedding, emb)
+                    scored_chunks.append({
+                        'text': chunk_texts[j],
+                        'relevance_score': score,
+                        'section': processed_chunks[j].get('section', ''),
+                        'type': processed_chunks[j].get('type', ''),
+                        'table': processed_chunks[j].get('table', '')
+                    })
             
             # Get candidates for balanced performance
             from config import DEFAULT_TOP_CHUNKS
